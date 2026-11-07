@@ -1,0 +1,30 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "aureon-sales-engine",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+  // Frontend (PWA) servido pelo próprio Worker via Static Assets: mesmo domínio da API,
+  // cookie de sessão sem CORS. Rotas da API e páginas públicas passam primeiro pelo Worker.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/u/*", "/agendar/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "aureon",
+      // troque pelo id gerado em `npx wrangler d1 create aureon`
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // Um único Cron Trigger (o plano gratuito permite 5 por conta). O agendador central lê a rotina no D1.
+  "triggers": { "crons": ["* * * * *"] },
+  "vars": {
+    // troque pela URL publicada, ex.: https://aureon-sales-engine.SEU-SUBDOMINIO.workers.dev
+    "APP_URL": "http://localhost:8787"
+  },
+  "observability": { "enabled": true }
+}

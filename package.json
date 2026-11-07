@@ -1,0 +1,21 @@
+{
+  "name": "aureon-sales-engine",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "wrangler dev",
+    "db:migrate:local": "wrangler d1 migrations apply aureon --local",
+    "db:migrate:remote": "wrangler d1 migrations apply aureon --remote",
+    "test": "vitest run",
+    "deploy": "wrangler d1 migrations apply aureon --remote && wrangler deploy",
+    "cron:local": "curl -s \"http://localhost:8787/cdn-cgi/handler/scheduled?cron=*+*+*+*+*\""
+  },
+  "license": "UNLICENSED",
+  "description": "Aureon — Autonomous Sales Engine (Cloudflare Workers + D1)",
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.6.0",
+    "vitest": "^4.1.12",
+    "wrangler": "^4.158.0"
+  },
+  "private": true,
+  "type": "module"
+}
