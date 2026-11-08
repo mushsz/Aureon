@@ -5,6 +5,7 @@
 import { nowIso, truncate } from '../util.js';
 import { getSettings, usageToday, stageStmts } from '../db.js';
 import { loadRules, checkExclusion, describeExclusion, subjectFromCompany } from '../exclusion.js';
+import { whatsappFromUrl, instagramHandle } from '../channels.js';
 
 export const USER_AGENT = 'AureonSalesEngine/1.0 (analise de presenca digital; respeita robots.txt)';
 
@@ -45,6 +46,7 @@ const TOOL_PATTERNS = [
   ['Squarespace', 'platform', /squarespace/i],
 ];
 
+const CONTACT_PAGE_RE = /contato|contact|fale|atendimento|sobre|quem-somos|quemsomos|about|empresa|equipe|time|team|nossa-historia|institucional/;
 const CTA_RE = /or[cç]amento|fale conosco|entre em contato|solicite|agende|agendar|comprar|simul[ae]|cota[cç][aã]o|pe[cç]a j[aá]|quero|contrate|saiba mais/i;
 const EMAIL_RE = /[a-z0-9._%+-]{1,64}@[a-z0-9.-]{1,253}\.[a-z]{2,24}/gi;
 const CNPJ_RE = /\b(\d{2})\.?(\d{3})\.?(\d{3})\/?(\d{4})-?(\d{2})\b/g;
@@ -127,7 +129,7 @@ export async function extractSignals(htmlBytes, pageUrl) {
   const s = {
     lang: null, title: '', description: '', viewport: null, generator: null, og: false,
     h1: [], nav_count: 0, links_internal: 0, links_external: 0,
-    tel_links: 0, mailto: [], whatsapp_links: 0, social: [],
+    tel_links: 0, mailto: [], whatsapp_links: 0, social: [], whatsapp_numbers: [], instagram_handles: [], contact_pages: [],
     forms: 0, form_actions: [], email_inputs: 0, tel_inputs: 0, textareas: 0,
     images: 0, images_without_alt: 0, manifest: false, scripts: [], inline_script_sample: '', text: '',
   };
@@ -164,9 +166,21 @@ export async function extractSignals(htmlBytes, pageUrl) {
         const low = href.toLowerCase();
         if (low.startsWith('tel:')) s.tel_links++;
         else if (low.startsWith('mailto:')) { const m = low.slice(7).split('?')[0]; if (m && s.mailto.length < 20) s.mailto.push(decodeURIComponent(m)); }
-        else if (/wa\.me\/|api\.whatsapp\.com|whatsapp:\/\//.test(low)) s.whatsapp_links++;
-        else if (/instagram\.com|facebook\.com|linkedin\.com|youtube\.com|tiktok\.com/.test(low)) { if (s.social.length < 10) s.social.push(truncate(href, 200)); }
-        else if (low.startsWith('/') || low.startsWith('#') || (host && low.includes(host))) s.links_internal++;
+        else if (/wa\.me\/|api\.whatsapp\.com|whatsapp:\/\//.test(low)) {
+          s.whatsapp_links++;
+          const n = whatsappFromUrl(href);
+          if (n && !s.whatsapp_numbers.includes(n) && s.whatsapp_numbers.length < 3) s.whatsapp_numbers.push(n);
+        }
+        else if (/instagram\.com|facebook\.com|linkedin\.com|youtube\.com|tiktok\.com/.test(low)) {
+          if (s.social.length < 10) s.social.push(truncate(href, 200));
+          const ig = /instagram\.com/.test(low) ? instagramHandle(href) : null;
+          if (ig && !s.instagram_handles.includes(ig) && s.instagram_handles.length < 3) s.instagram_handles.push(ig);
+        }
+        else if (low.startsWith('/') || low.startsWith('#') || (host && low.includes(host))) {
+          s.links_internal++;
+          // páginas onde a empresa costuma publicar quem atende: contato, sobre, equipe
+          if (!low.startsWith('#') && CONTACT_PAGE_RE.test(low) && s.contact_pages.length < 6 && !s.contact_pages.includes(href)) s.contact_pages.push(truncate(href, 300));
+        }
         else if (low.startsWith('http')) s.links_external++;
       },
     })
@@ -204,11 +218,11 @@ export async function extractSignals(htmlBytes, pageUrl) {
 }
 
 /** Deriva sinais secundários (ferramentas, CNPJ, e-mails, ano do copyright, CTA). */
-export function deriveSignals(s, html = '') {
+export function deriveSignals(s, html = '', extraText = '') {
   const haystack = [s.scripts.join(' '), s.inline_script_sample, s.generator || '', html.slice(0, 200_000)].join(' ');
   const tools = [];
   for (const [name, cat, re] of TOOL_PATTERNS) if (re.test(haystack)) tools.push({ name, category: cat });
-  const text = s.text || '';
+  const text = `${s.text || ''} ${extraText || ''}`;
   const emails = new Set(s.mailto.map((e) => e.toLowerCase()));
   for (const m of text.matchAll(EMAIL_RE)) { if (emails.size < 20) emails.add(m[0].toLowerCase()); }
   const cnpjs = [];
@@ -228,7 +242,7 @@ export function deriveSignals(s, html = '') {
     emails: [...emails].filter((e) => !/\.(png|jpe?g|gif|webp|svg)$/.test(e) && !/sentry|wixpress|example\./.test(e)),
     cnpjs,
     copyright_year: copyrightYear,
-    has_cta: CTA_RE.test(text) || s.h1.some((h) => CTA_RE.test(h)),
+    has_cta: CTA_RE.test(s.text || '') || s.h1.some((h) => CTA_RE.test(h)),
     jquery_old: jqueryOld,
   };
 }
@@ -334,6 +348,43 @@ export async function lookupCnpj(ctx, cnpj) {
   };
 }
 
+/**
+ * Lê até 2 páginas internas de contato/sobre/equipe (mesmo domínio, respeitando robots.txt) e junta
+ * e-mails, WhatsApp e Instagram que a empresa publica nelas. Só para achar canais: os achados
+ * continuam falando da página inicial.
+ */
+async function readContactPages(ctx, pageUrl, s, robotsTxt) {
+  const out = { pages: [], text: '' };
+  let base;
+  try { base = new URL(pageUrl); } catch { return out; }
+  const host = base.hostname.replace(/^www\./, '');
+  const urls = [];
+  for (const href of s.contact_pages) {
+    let u;
+    try { u = new URL(href, base); } catch { continue; }
+    if (u.hostname.replace(/^www\./, '') !== host || !/^https?:$/.test(u.protocol)) continue;
+    u.hash = '';
+    if (u.href === base.href || urls.includes(u.href)) continue;
+    if (!robotsAllows(robotsTxt, u.pathname)) continue;
+    urls.push(u.href);
+    if (urls.length >= 2) break;
+  }
+  for (const url of urls) {
+    try {
+      ctx.metric('site_fetches'); ctx.metric('subrequests');
+      const res = await ctx.fetch(url, { headers: { 'user-agent': USER_AGENT, accept: 'text/html' }, redirect: 'follow', signal: AbortSignal.timeout(12_000) });
+      if (!res.ok || !/html/i.test(res.headers.get('content-type') || '')) { try { await res.body?.cancel(); } catch { /* ok */ } continue; }
+      const sig = await extractSignals(await readLimited(res, 200 * 1024), url);
+      out.pages.push(url);
+      out.text += ` ${sig.text}`;
+      for (const m of sig.mailto) if (!s.mailto.includes(m) && s.mailto.length < 20) s.mailto.push(m);
+      for (const n of sig.whatsapp_numbers) if (!s.whatsapp_numbers.includes(n) && s.whatsapp_numbers.length < 3) s.whatsapp_numbers.push(n);
+      for (const h of sig.instagram_handles) if (!s.instagram_handles.includes(h) && s.instagram_handles.length < 3) s.instagram_handles.push(h);
+    } catch { /* página extra é opcional */ }
+  }
+  return out;
+}
+
 // ---------- execução ----------
 
 export async function analyzeCompany(ctx, company, settings) {
@@ -341,11 +392,12 @@ export async function analyzeCompany(ctx, company, settings) {
   if (!company.website) return a;
   const origin = new URL(company.website).origin;
 
+  let robotsTxt = '';
   try {
     ctx.metric('site_fetches'); ctx.metric('subrequests');
     const r = await ctx.fetch(`${origin}/robots.txt`, { headers: { 'user-agent': USER_AGENT }, redirect: 'follow', signal: AbortSignal.timeout(8000) });
-    const txt = r.ok ? truncate(await r.text(), 50_000) : '';
-    a.robots_allowed = robotsAllows(txt, new URL(company.website).pathname || '/');
+    robotsTxt = r.ok ? truncate(await r.text(), 50_000) : '';
+    a.robots_allowed = robotsAllows(robotsTxt, new URL(company.website).pathname || '/');
   } catch { a.robots_allowed = true; /* sem robots.txt acessível = sem restrição declarada */ }
   if (!a.robots_allowed) return a;
 
@@ -365,7 +417,10 @@ export async function analyzeCompany(ctx, company, settings) {
       a.page_bytes = Number(res.headers.get('content-length')) || bytes.byteLength;
       a.signals = await extractSignals(bytes, a.final_url);
       const htmlHead = new TextDecoder().decode(bytes.subarray(0, 60_000));
-      a.derived = deriveSignals(a.signals, htmlHead);
+      const extra = await readContactPages(ctx, a.final_url, a.signals, robotsTxt);
+      a.signals.pages_read = extra.pages;
+      a.signals.extra_text = truncate(extra.text, 6000);
+      a.derived = deriveSignals(a.signals, htmlHead, extra.text);
     } else if (res.ok) {
       a.fetch_error = `conteúdo não é HTML (${truncate(type, 60)})`;
       try { await res.body?.cancel(); } catch { /* ok */ }
@@ -412,6 +467,8 @@ export async function runInvestigate(ctx, batch = 2) {
     const stmts = [];
     let cnpjNote = null;
     const upd = { research_status: 'investigated' };
+    if (!company.instagram && a.signals?.instagram_handles?.[0]) upd.instagram = a.signals.instagram_handles[0];
+    if (!company.whatsapp && a.signals?.whatsapp_numbers?.[0]) upd.whatsapp = a.signals.whatsapp_numbers[0];
     if (a.cnpj) {
       const dup = await ctx.first('SELECT id FROM companies WHERE cnpj = ? AND id != ?', a.cnpj.number, company.id);
       if (dup) cnpjNote = `CNPJ ${a.cnpj.number} já pertence à empresa #${dup.id}`;
@@ -430,7 +487,7 @@ export async function runInvestigate(ctx, batch = 2) {
     upd.updated_at = nowIso();
     const keys = Object.keys(upd);
     stmts.push(ctx.stmt(`UPDATE companies SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...keys.map((k) => upd[k]), company.id));
-    const signalsToStore = a.signals ? { ...a.signals, inline_script_sample: undefined, text: truncate(a.signals.text, 3000), derived: a.derived, cnpj: a.cnpj, cnpj_note: cnpjNote } : { cnpj: a.cnpj };
+    const signalsToStore = a.signals ? { ...a.signals, inline_script_sample: undefined, contact_pages: undefined, text: truncate(a.signals.text, 3000), derived: a.derived, cnpj: a.cnpj, cnpj_note: cnpjNote } : { cnpj: a.cnpj };
     stmts.push(ctx.stmt(
       `INSERT INTO lead_analyses (company_id, url, final_url, http_status, response_ms, page_bytes, fetch_error, robots_allowed, signals, findings, psi, analyzed_at)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,

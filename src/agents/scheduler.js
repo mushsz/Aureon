@@ -4,8 +4,7 @@
 
 import { nowIso, sha256Hex, zonedParts, zonedToUtc, hmToMinutes, parseDays, escapeHtml, truncate } from '../util.js';
 import { getSettings, stageStmts } from '../db.js';
-import { freeBusy, createEvent, getEvent, deleteEvent, buildMime, gmailSend } from '../google.js';
-import { isLive } from './outreach.js';
+import { freeBusy, createEvent, getEvent, deleteEvent, buildMime, gmailSend, accessToken } from '../google.js';
 
 /** Gera horários candidatos e retira os ocupados. Puro (testável). */
 export function computeSlots({ now, availability, timezone, busy = [], max = 24 }) {
@@ -53,8 +52,11 @@ export async function availableSlots(ctx, settings) {
   return computeSlots({ now: ctx.now, availability: av, timezone: settings.timezone, busy });
 }
 
+// Confirmação e lembretes são transacionais (a pessoa pediu a reunião): saem sempre que o Google
+// estiver conectado, mesmo em modo simulação de prospecção.
 async function sendConfirmation(ctx, settings, appt, text, subject) {
-  if (!isLive(settings) || !appt.attendee_email) return 'simulated';
+  if (!appt.attendee_email) return 'skipped';
+  try { await accessToken(ctx); } catch { return 'skipped'; }
   const conv = appt.conversation_id ? await ctx.first('SELECT gmail_thread_id FROM conversations WHERE id = ?', appt.conversation_id) : null;
   const mime = buildMime({ from: settings.sender.email, fromName: settings.sender.name, to: appt.attendee_email, subject, text });
   await gmailSend(ctx, mime, conv?.gmail_thread_id || null);
@@ -88,8 +90,9 @@ export async function bookSlot(ctx, appt, slotStart, attendeeEmail) {
   if (!check?.id || check.status === 'cancelled') return { ok: false, error: 'O evento não foi confirmado pela agenda. Nada foi marcado; tente novamente.' };
   const ts = nowIso();
   await ctx.batch([
-    ctx.stmt(`UPDATE appointments SET status = 'booked', starts_at = ?, ends_at = ?, attendee_email = ?, calendar_event_id = ?, html_link = ?, updated_at = ? WHERE id = ?`,
-      slot.start, slot.end, email, check.id, check.htmlLink || null, ts, appt.id),
+    ctx.stmt(`UPDATE appointments SET status = 'booked', starts_at = ?, ends_at = ?, attendee_email = ?, calendar_event_id = ?, html_link = ?, meet_link = ?, updated_at = ? WHERE id = ?`,
+      slot.start, slot.end, email, check.id, check.htmlLink || null, check.hangoutLink || null, ts, appt.id),
+    ctx.stmt("UPDATE tasks SET status = 'done', done_at = ?, updated_at = ? WHERE lead_id = ? AND status = 'open' AND kind IN ('reply','hot','touch')", ts, ts, appt.lead_id),
     ...stageStmts(ctx, { id: appt.lead_id, stage: appt.stage }, 'reuniao_agendada', `Reunião em ${fmt(slot.start, settings.timezone)}`, 'scheduler'),
   ]);
   const meet = check.hangoutLink ? `\nLink da chamada: ${check.hangoutLink}` : '';
@@ -144,4 +147,49 @@ ${error ? `<div class="card err">${escapeHtml(error)}</div>` : ''}
 <form method="post" action="/agendar/${token}"><input type="hidden" name="csrf" value="${csrf}">${groups}
 <label class="field">Seu e-mail para o convite<input type="email" name="email" value="${escapeHtml(appt.contact_email || '')}" required autocomplete="email"></label>
 <button class="btn" type="submit">Confirmar horário</button></form>`);
+}
+
+/** Lembretes por e-mail 24 h e 1 h antes de cada reunião marcada (sem duplicar). */
+export async function runReminders(ctx) {
+  const settings = await getSettings(ctx);
+  if (!settings.agents.scheduler) return { sent: 0 };
+  try { await accessToken(ctx); } catch { return { sent: 0, note: 'Google não conectado' }; }
+  const now = ctx.now.getTime();
+  const rows = await ctx.all(
+    `SELECT a.*, c.name AS company_name FROM appointments a JOIN leads l ON l.id = a.lead_id JOIN companies c ON c.id = l.company_id
+     WHERE a.status = 'booked' AND a.starts_at > ? AND a.starts_at <= ?`, new Date(now).toISOString(), new Date(now + 25 * 3_600_000).toISOString(),
+  );
+  let sent = 0;
+  for (const a of rows) {
+    const mins = (new Date(a.starts_at).getTime() - now) / 60_000;
+    const kind = mins <= 75 && mins >= 40 ? '1h' : mins >= 22 * 60 ? '24h' : null;
+    if (!kind || !a.attendee_email) continue;
+    const key = `reminder:${a.id}:${kind}`;
+    const ins = await ctx.run(
+      `INSERT OR IGNORE INTO messages (conversation_id, lead_id, direction, kind, status, subject, body_text, to_addr, from_addr, dedupe_key, created_at, updated_at)
+       VALUES (?, ?, 'out', 'reminder', 'sending', ?, ?, ?, ?, ?, ?, ?)`,
+      a.conversation_id, a.lead_id, `Lembrete: nossa conversa ${kind === '1h' ? 'daqui a 1 hora' : 'amanhã'}`,
+      `Olá!
+
+Lembrete da nossa conversa ${fmt(a.starts_at, settings.timezone)} (horário de Brasília).${a.meet_link ? `
+Link da chamada: ${a.meet_link}` : ''}
+
+Se precisar remarcar, é só responder este e-mail.
+
+${settings.sender.name}`,
+      a.attendee_email, settings.sender.email, key, nowIso(), nowIso(),
+    );
+    if (!ins.changes) continue;
+    const msg = await ctx.first('SELECT id, subject, body_text FROM messages WHERE dedupe_key = ?', key);
+    try {
+      const r = await sendConfirmation(ctx, settings, a, msg.body_text, msg.subject);
+      await ctx.run('UPDATE messages SET status = ?, sent_at = ?, updated_at = ? WHERE id = ?', r === 'skipped' ? 'cancelled' : 'sent', nowIso(), nowIso(), msg.id);
+      if (r !== 'skipped') sent++;
+    } catch (e) {
+      await ctx.run('DELETE FROM messages WHERE id = ?', msg.id);
+      throw e;
+    }
+  }
+  if (sent) ctx.log('info', 'scheduler', `${sent} lembrete(s) de reunião enviado(s)`);
+  return { sent };
 }

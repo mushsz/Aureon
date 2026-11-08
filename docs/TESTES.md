@@ -1,6 +1,6 @@
 # Testes
 
-## Automatizados — `npm test` (54 testes, todos passando em 07/11/2026)
+## Automatizados — `npm test` (68 testes, todos passando em 07/11/2026)
 
 Rodam dentro do runtime real dos Workers (workerd/Miniflare) com D1 local e as migrations aplicadas. As APIs externas são substituídas por um `fetch` falso que devolve respostas no formato real (Overpass, sites, Gmail, Calendar).
 
@@ -25,6 +25,12 @@ Rodam dentro do runtime real dos Workers (workerd/Miniflare) com D1 local e as m
 | Limites | limite atingido pausa só a tarefa afetada e gera alerta |
 | Janela de envio | fora do horário configurado não envia |
 | Vigia | `/api/health` aponta Cron parado, Google expirado e pausa emergencial, sem expor dados |
+| Rotina diária | lead só com WhatsApp vira cartão com `wa.me` + texto; "Feito" registra o contato e avança; próximo toque só no dia certo e em outro canal; limite de cartões; "Amanhã" adia |
+| Mini-auditoria | página pública abre, visita sua (logado) não conta, visita real vira cartão quente, botão de agendar redireciona, link inexistente dá 404 |
+| Não contatar | suprime telefone e Instagram e tira a empresa da lista |
+| Sequência de e-mails | 2º e-mail com link da agenda no dia 4, encerramento no dia 12, perdido depois |
+| Lembretes | lembrete 1 h antes sai uma vez só |
+| Canais | telefone, `wa.me`, `@` do Instagram, páginas de contato no HTML, nome só quando escrito na página, e-mail nominal só com a opção ligada |
 
 ## Ponta a ponta com dados reais — `node scripts/smoke.mjs`
 
@@ -36,6 +42,10 @@ Executado contra o Worker local (`wrangler dev`) em 07/11/2026:
 - O envio foi barrado por estar fora da janela (sábado à noite) até a janela ser aberta só para o teste.
 - Pausa emergencial bloqueou a execução manual.
 - Dois problemas reais encontrados e corrigidos nesse teste: consulta Overpass pesada demais (estourava o tempo do servidor) e termos de dúvida no texto do site de construtoras ("academia do condomínio", "salão de festas") mandando empresas boas para revisão.
+
+## Rotina diária com dados reais (08/11/2026)
+
+As 6 construtoras de Joinville foram reanalisadas lendo também as páginas de contato/equipe. Antes, só a Civilcon tinha e-mail. Com as páginas de contato, o sistema encontrou `vendas@crfernandes.com.br`, um e-mail nominal na Civilcon (em revisão, porque a opção vem desligada), o Instagram de 4 delas, o WhatsApp de 2 e o telefone de todas. Ao liberar a Axia Vectra pelo cartão "Decidir rápido", a lista foi remontada e apareceu o cartão de primeiro contato com WhatsApp (texto preenchido), Instagram e ligação. A página pública da análise da Axia abriu como visitante, e o botão de agendar levou à página de horários.
 
 ## Painel
 

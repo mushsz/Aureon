@@ -38,10 +38,10 @@ export function scoreLead({ company, findings, best, analysis, settings }) {
 
   // 1. Canal comercial
   if (best?.type === 'email' && best.ev.status === 'valid') add('Canal comercial', 20, 20, `E-mail institucional ${best.norm} publicado (${best.evidence})`);
+  else if (best?.type === 'whatsapp') add('Canal comercial', 14, 20, 'WhatsApp publicado (contato manual pela tela Hoje)');
   else if (best?.type === 'email') add('Canal comercial', 10, 20, `E-mail ${best.norm} precisa de revisão: ${best.ev.notes}`);
-  else if (best?.type === 'form') add('Canal comercial', 8, 20, 'Só formulário no site (envio automático não é feito por formulário)');
-  else if (best?.type === 'phone') add('Canal comercial', 5, 20, 'Só telefone institucional');
-  else if (best?.type === 'whatsapp') add('Canal comercial', 4, 20, 'Só WhatsApp');
+  else if (best?.type === 'phone' || company.instagram) add('Canal comercial', 8, 20, company.instagram ? `Instagram @${company.instagram}${best?.type === 'phone' ? ' e telefone' : ''} (contato manual)` : 'Telefone institucional (ligação pela tela Hoje)');
+  else if (best?.type === 'form') add('Canal comercial', 6, 20, 'Só formulário no site (envio automático não é feito por formulário)');
   else add('Canal comercial', 0, 20, 'Nenhum canal comercial publicado encontrado');
 
   // 2. Oportunidades identificadas
@@ -113,7 +113,7 @@ export async function runScore(ctx, batch = 15) {
   for (const r of rows) {
     const analysis = byId.get(r.analysis_id) || { signals: {}, findings: [] };
     const company = { ...r, id: r.id };
-    const { stmts: cs, best } = contactStatements(ctx, company, analysis, suppressed);
+    const { stmts: cs, best } = contactStatements(ctx, company, analysis, suppressed, { allowNamed: !!settings.outreach.allow_named_contacts });
     stmts.push(...cs);
     const result = scoreLead({ company, findings: analysis.findings, best, analysis, settings });
     stmts.push(ctx.stmt(

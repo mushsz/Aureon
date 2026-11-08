@@ -1,5 +1,46 @@
 # Operação: horários, primeira campanha, rotina e manutenção
 
+## Sua rotina de 10 minutos (tela Hoje)
+
+A primeira aba do app é **Hoje**: a lista do dia, montada às 06:30, com no máximo 12 cartões (ajustável em Configurações → Rotina diária). Às 06:30 também sai um e-mail para você com o resumo e o link. Abra no celular antes do trabalho e resolva de cima para baixo:
+
+| Cartão | O que é | O que você faz |
+|---|---|---|
+| **Responder agora** | alguém respondeu o e-mail | "Enviar horários" (manda 3 horários livres + link da agenda), "Pedir telefone" ou "Responder". Você revisa o texto antes de enviar |
+| **Quentes** | a empresa abriu a sua análise nas últimas 48 h | toque em WhatsApp/Instagram/Ligar: abre com a mensagem pronta |
+| **Reuniões de hoje** | reunião marcada hoje | lembrete pronto no WhatsApp (o e-mail de lembrete sai sozinho 24 h e 1 h antes) |
+| **Toques do dia** | próximo passo da sequência | WhatsApp, Instagram ou ligação com texto/roteiro pronto |
+| **Decidir rápido** | empresa em dúvida na lista de exclusão | Liberar ou Bloquear |
+
+Botões de cada cartão: **Feito** (registra o contato e agenda o próximo passo), **Amanhã** (adia), **Pular** (encerra os toques manuais dessa empresa) e **Não contatar** (tira a empresa de todos os canais para sempre).
+
+- **WhatsApp** abre a conversa da empresa com o texto preenchido (link oficial `wa.me`); você só toca em enviar.
+- **Instagram**: o texto é copiado e a DM da empresa abre (`ig.me`); cole e envie.
+- **Ligar** abre o discador e mostra um roteiro de 30 segundos.
+- Nada sai por WhatsApp ou Instagram sem você: as regras da Meta não permitem mensagem automática a frio, e um robô arriscaria bloquear o seu perfil.
+
+### A sequência completa de cada empresa
+
+| Dia | Com e-mail publicado | Só com WhatsApp/Instagram/telefone |
+|---|---|---|
+| 0 | E-mail automático com a observação e o link da análise | Cartão: primeira mensagem (WhatsApp → Instagram → ligação) |
+| 2 | Cartão: Instagram ou WhatsApp | — |
+| 4 | E-mail automático: novo ponto + link da agenda | Cartão: segundo toque em outro canal |
+| 6 | Cartão: WhatsApp ou ligação | — |
+| 9 | — | Cartão: ligação ou WhatsApp |
+| 12 | E-mail automático de encerramento | — |
+| 19 | Sem resposta → Perdido | — |
+
+Quem responde, abre a análise ou marca reunião sai da sequência e vai para o cartão certo. Os dias são editáveis em Configurações (e-mails) e em `planner` no banco (toques manuais).
+
+### A mini-auditoria
+
+Cada empresa ganha uma página pública (`/analise/...`) com o que foi observado no site, por que importa e os botões "Escolher um horário", "Falar no WhatsApp" (o seu telefone do remetente) e "Responder por e-mail". O link vai no primeiro e-mail e nas mensagens manuais. Quando a empresa abre (e fica 4 segundos na página), ela vira cartão **Quente**. Suas próprias visitas, logado no painel, não contam. Em **Empresas → Contatos** você vê quantas vezes ela foi aberta e pode copiar o link.
+
+### E-mail do responsável
+
+O sistema agora lê também as páginas de contato, sobre e equipe do site. Com **Configurações → Envio → "Usar e-mail nominal publicado pela própria empresa"** ligado, um endereço como `joao@empresa.com.br` encontrado no site da própria empresa passa a ser usado (e tem prioridade sobre `contato@`), com a saudação pelo nome quando o nome aparece escrito na página. Vem desligado; ligue se concordar com a base legal descrita em [ARQUITETURA.md](ARQUITETURA.md).
+
 ## Rotina padrão (editável em Mais → Automação)
 
 Todos os horários estão no fuso `America/Sao_Paulo`, de segunda a sexta.
@@ -7,12 +48,14 @@ Todos os horários estão no fuso `America/Sao_Paulo`, de segunda a sexta.
 | Tarefa | Janela | Frequência | Lote | O que faz |
 |---|---|---|---|---|
 | Descobrir novas empresas | 08:00–08:59 | a cada 10 min | 1 alvo | Consulta o OpenStreetMap para o próximo alvo cadastrado |
-| Investigar empresas | 09:00–09:59 | a cada 1 min | 2 sites | Lê robots.txt e a página inicial, registra achados |
-| Encontrar contatos e classificar | 10:00–10:59 | a cada 2 min | 15 | Canais + base legal + pontuação |
+| Montar a rotina do dia | a partir de 06:30 | 1×/dia | — | Monta a tela Hoje e manda o e-mail da manhã |
+| Investigar empresas | 09:00–10:29 | a cada 1 min | 1 site | Lê robots.txt, a página inicial e até 2 páginas de contato/equipe |
+| Encontrar contatos e classificar | 10:30–10:59 | a cada 2 min | 15 | Canais (e-mail, WhatsApp, Instagram, telefone) + base legal + pontuação |
 | Preparar novos contatos | 11:00–11:59 | a cada 2 min | 10 | Gera as mensagens (rascunhos) |
 | Executar prospecção | 13:00–13:59 | a cada 1 min | 1 | Envia (ou simula) dentro dos limites |
 | Verificar respostas | 08:00–19:00 | a cada 15 min | 10 | Lê o Gmail, classifica, descadastra, responde se autorizado |
-| Follow-ups | 15:00–15:59 | a cada 1 min | 1 | Retoma quem não respondeu |
+| Sequência de e-mails | 15:00–15:59 | a cada 1 min | 1 | 2º e-mail (dia 4) e encerramento (dia 12) para quem não respondeu |
+| Lembretes de reunião | 06:00–22:00, todos os dias | a cada 15 min | — | E-mail 24 h e 1 h antes de cada reunião |
 | Relatórios e limpeza | a partir de 17:00 | 1×/dia | — | Limpa dados vencidos, e-mail de alertas para você |
 
 ### Como configurar um horário
@@ -54,7 +97,7 @@ Desligadas por padrão. Em **Configurações → Respostas automáticas**, ligue
 
 ## Rotina sugerida para você
 
-- **Diariamente (2 min)**: abra **Início**. Se houver "itens aguardando revisão", abra **Conversas → Revisão** e responda/classifique.
+- **Diariamente (10 min)**: abra **Hoje** no celular e resolva os cartões.
 - **Semanalmente**: **Empresas → Em revisão**; **Automação → Erros e alertas**; **Uso e limites**.
 - **Pausa emergencial**: Automação → botão vermelho. Para tudo, inclusive a fila. Para retomar: **Liberar sistema**.
 

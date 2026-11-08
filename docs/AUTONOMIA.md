@@ -6,7 +6,7 @@ Depois de uma configuração única (cerca de 30 minutos, feita uma vez), o Aure
 
 | Peça | Como roda sozinha |
 |---|---|
-| Publicação | GitHub Actions **Testar e publicar**: a cada push na `main`, roda os 54 testes e, se passarem, publica. Na primeira vez cria o banco D1, aplica o schema, descobre a URL e gera a chave de criptografia |
+| Publicação | GitHub Actions **Testar e publicar**: a cada push na `main`, roda os 68 testes e, se passarem, publica. Na primeira vez cria o banco D1, aplica o schema, descobre a URL e gera a chave de criptografia |
 | Rotina diária | 1 Cron da Cloudflare por minuto; o agendador central segue os horários de **Automação** |
 | Falhas | retentativas com espera crescente, recuperação de tarefas travadas, tarefa diária perdida roda no próximo ciclo |
 | Cotas gratuitas | ao chegar perto do limite, só a tarefa afetada pausa e volta sozinha às 00:00 UTC |
@@ -63,7 +63,8 @@ A partir daqui, nada mais é obrigatório.
 
 | Situação | Frequência | O sistema faz | Você faz |
 |---|---|---|---|
-| Resposta ambígua, objeção, pergunta de preço | algumas por semana | marca **Revisão necessária**, nunca responde sozinho | responde pelo painel (é proteção, não falha) |
+| Rotina da tela Hoje (respostas, quentes, toques por WhatsApp/Instagram/ligação, reuniões) | diária, ~10 min | monta a lista às 06:30 com texto pronto e te avisa por e-mail | resolve os cartões pelo celular |
+| Resposta ambígua, objeção, pergunta de preço | algumas por semana | marca **Revisão necessária** e cria cartão "Responder", nunca responde sozinho | responde pela tela Hoje (é proteção, não falha) |
 | Empresa em dúvida na lista de exclusão | eventual | não prospecta | libera ou bloqueia em **Empresas → Em revisão** |
 | Alvos esgotados (as mesmas cidades param de render empresas novas) | a cada algumas semanas | segue as outras etapas; a busca registra "0 novas" | adiciona cidades/segmentos (o segmento "Descoberta automática" ajuda) |
 | Google desconectado (troca de senha da conta, acesso revogado) | raro | para envios e leitura, alerta por e-mail e pelo Vigia | clica **Conectar Google** |

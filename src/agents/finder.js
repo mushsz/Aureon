@@ -6,6 +6,7 @@
 import { normalize, nowIso, truncate } from '../util.js';
 import { loadRules, checkExclusion, describeExclusion } from '../exclusion.js';
 import { getSettings, usageToday } from '../db.js';
+import { normalizePhone, instagramHandle } from '../channels.js';
 
 // Segmentos → filtros de tags OSM. "auto" pega qualquer escritório/ofício e deriva o segmento da tag.
 export const SEGMENTS = {
@@ -123,7 +124,7 @@ function deriveSegment(tags, requested) {
 }
 
 const KEEP_TAGS = ['office', 'shop', 'craft', 'amenity', 'healthcare', 'healthcare:speciality', 'man_made', 'industrial',
-  'leisure', 'social_facility', 'emergency', 'brand', 'operator', 'description', 'opening_hours'];
+  'leisure', 'social_facility', 'emergency', 'brand', 'operator', 'description', 'opening_hours', 'contact:instagram', 'contact:whatsapp'];
 
 export function parseOverpass(json, req) {
   const out = [];
@@ -135,6 +136,8 @@ export function parseOverpass(json, req) {
     const email = String(t.email || t['contact:email'] || '').trim().toLowerCase().split(/[;,\s]+/)[0] || null;
     const phone = String(t.phone || t['contact:phone'] || '').trim().split(';')[0] || null;
     const seg = deriveSegment(t, req.segment);
+    const instagram = instagramHandle(t['contact:instagram'] || '') || instagramHandle(site.social || '');
+    const whatsapp = normalizePhone(t['contact:whatsapp'] || t.whatsapp || '');
     const tags = {};
     for (const k of KEEP_TAGS) if (t[k]) tags[k] = truncate(t[k], 200);
     out.push({
@@ -147,6 +150,7 @@ export function parseOverpass(json, req) {
       website: site.website, domain: site.domain, social_url: site.social,
       email: email && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) ? email : null,
       phone: phone ? truncate(phone, 40) : null,
+      instagram, whatsapp,
       source: 'osm',
       source_ref: `osm:${el.type}/${el.id}`,
       source_url: `https://www.openstreetmap.org/${el.type}/${el.id}`,
@@ -165,16 +169,21 @@ export async function saveCandidates(ctx, candidates, actor = 'finder') {
   const ts = nowIso();
   const stmts = [];
   const meta = [];
-  for (const c of candidates) {
+  const FIELDS = ['segment', 'company_type', 'country', 'state', 'city', 'website', 'domain', 'social_url', 'email', 'phone', 'instagram', 'whatsapp', 'source_url'];
+  for (const c0 of candidates) {
+    // campos ausentes viram NULL (o D1 não aceita undefined)
+    const c = { ...c0 };
+    for (const k of FIELDS) if (c[k] === undefined) c[k] = null;
+    if (!c.country) c.country = 'BR';
     const ex = checkExclusion(rules, { ...c, text: '' });
     const exStatus = ex.verdict === 'block' ? 'block' : ex.verdict === 'review' ? 'review' : 'allow';
     stmts.push(ctx.stmt(
       `INSERT OR IGNORE INTO companies (name, normalized_name, segment, company_type, country, state, city, normalized_city,
-        website, domain, social_url, email, phone, source, source_ref, source_url, source_tags,
+        website, domain, social_url, email, phone, instagram, whatsapp, source, source_ref, source_url, source_tags,
         research_status, exclusion_status, exclusion_reason, exclusion_checked_at, discovered_at, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       c.name, normalize(c.name), c.segment, c.company_type, c.country, c.state, c.city, normalize(c.city),
-      c.website, c.domain, c.social_url, c.email, c.phone, c.source, c.source_ref, c.source_url, JSON.stringify(c.tags || {}),
+      c.website, c.domain, c.social_url, c.email, c.phone, c.instagram || null, c.whatsapp || null, c.source, c.source_ref, c.source_url, JSON.stringify(c.tags || {}),
       exStatus === 'block' ? 'skipped' : 'pending', exStatus, describeExclusion(ex), ts, ts, ts, ts,
     ));
     meta.push({ c, exStatus });
@@ -260,6 +269,7 @@ export function parseManualImport(text, defaults = {}) {
       country: 'BR', state: (state || defaults.state || '').toUpperCase().slice(0, 2) || null, city: city || defaults.city || null,
       website: w.website, domain: w.domain, social_url: w.social,
       email: /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em) ? em : null, phone: phone ? truncate(phone, 40) : null,
+      instagram: instagramHandle(w.social || '') || null, whatsapp: null,
       source: 'manual', source_ref: `manual:${normalize(name).replace(/ /g, '-')}:${normalize(city || '').replace(/ /g, '-')}`,
       source_url: null, tags: {},
     });

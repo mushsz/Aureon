@@ -12,13 +12,17 @@ import { runScore } from './agents/scorer.js';
 import { runPrepare } from './agents/copywriter.js';
 import { runOutreach, runFollowup } from './agents/outreach.js';
 import { runInbox } from './agents/inbox.js';
+import { runPlan } from './agents/planner.js';
+import { runReminders } from './agents/scheduler.js';
 import { GoogleNotConnected, buildMime, gmailSend } from './google.js';
 
 export const TASK_AGENT = {
   discover: 'finder', investigate: 'investigator', score: 'scorer', prepare: 'copywriter',
   outreach: 'outreach', inbox: 'inbox', followup: 'followup', report: 'report',
+  plan: 'planner', reminders: 'scheduler',
 };
-const RUN_WHEN_PAUSED = new Set(['inbox', 'report']); // ler respostas (descadastros) e relatório continuam
+// pausado: ler respostas (descadastros), lembrar reuniões já marcadas, montar a lista manual e relatório continuam
+const RUN_WHEN_PAUSED = new Set(['inbox', 'report', 'plan', 'reminders']);
 const MAX_JOBS_PER_TICK = 3;
 const STALE_JOB_MINUTES = 10;
 const STALE_RESEARCH_MINUTES = 15;
@@ -30,7 +34,7 @@ export async function ensureSeeded(ctx) {
   const ts = nowIso();
   await ctx.batch(DEFAULT_SCHEDULES.map((s) => ctx.stmt(
     `INSERT OR IGNORE INTO schedules (task, label, enabled, days, start_time, end_time, interval_minutes, batch_size, updated_at)
-     VALUES (?,?,1,'1,2,3,4,5',?,?,?,?,?)`, s.task, s.label, s.start_time, s.end_time, s.interval_minutes, s.batch_size, ts,
+     VALUES (?,?,1,?,?,?,?,?,?)`, s.task, s.label, s.days || '1,2,3,4,5', s.start_time, s.end_time, s.interval_minutes, s.batch_size, ts,
   )));
   await ctx.run("INSERT OR IGNORE INTO campaigns (id, name, status, created_at, updated_at) VALUES (1, 'Prospecção principal', 'active', ?, ?)", ts, ts);
   return true;
@@ -154,6 +158,8 @@ export async function runJob(ctx, job, settings) {
     case 'followup': return runFollowup(ctx, Math.min(batch, 3));
     case 'inbox': return runInbox(ctx, Math.min(batch, 15));
     case 'report': return runReport(ctx, settings);
+    case 'plan': return runPlan(ctx);
+    case 'reminders': return runReminders(ctx);
     default: throw new Error(`Tipo de tarefa desconhecido: ${job.type}`);
   }
 }

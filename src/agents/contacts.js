@@ -2,7 +2,8 @@
 // Prioridade: e-mail institucional no domínio da empresa > formulário > telefone > outros.
 // Não procura e-mails escondidos, não adivinha endereços, não acessa áreas privadas.
 
-import { nowIso } from '../util.js';
+import { nowIso, normalize } from '../util.js';
+import { normalizePhone } from '../channels.js';
 
 const ROLE_PREFIXES = ['contato', 'contact', 'comercial', 'vendas', 'sales', 'atendimento', 'faleconosco', 'fale', 'sac',
   'info', 'informacoes', 'orcamento', 'orcamentos', 'marketing', 'adm', 'administrativo', 'administracao', 'empresa',
@@ -28,7 +29,7 @@ export function classifyEmail(email, companyDomain) {
 }
 
 /** Base legal avaliada (LGPD art. 7º IX — legítimo interesse — para contato B2B com endereço institucional). */
-export function evaluateLegalBasis(email, companyDomain, sourceType) {
+export function evaluateLegalBasis(email, companyDomain, sourceType, { allowNamed = false } = {}) {
   const c = classifyEmail(email, companyDomain);
   if (!c.usable) return { status: 'invalid', legal_basis: 'none', notes: `Não usar: ${c.reason}.`, role: false };
   if (c.role && c.sameDomain) {
@@ -39,6 +40,13 @@ export function evaluateLegalBasis(email, companyDomain, sourceType) {
     };
   }
   if (c.free) return { status: 'pending_review', legal_basis: 'needs_review', role: c.role, notes: 'E-mail em provedor gratuito: pode ser pessoal do dono. Revisar antes de usar.' };
+  if (c.looksPersonal && c.sameDomain && sourceType === 'website' && allowNamed) {
+    return {
+      status: 'valid', legal_basis: 'legitimate_interest_b2b', role: false, named: true,
+      notes: `Contato nominal corporativo (${email}) publicado pela própria empresa no site. Legítimo interesse (LGPD art. 7º IX) com ` +
+        'balanceamento: endereço profissional ligado à função, sem dado sensível, finalidade comercial B2B explícita e descadastro em toda mensagem. Não é consentimento.',
+    };
+  }
   if (c.looksPersonal) return { status: 'pending_review', legal_basis: 'needs_review', role: false, notes: 'Parece e-mail pessoal de colaborador (nome.sobrenome). Revisar antes de usar.' };
   if (!c.sameDomain) return { status: 'pending_review', legal_basis: 'needs_review', role: c.role, notes: 'Domínio do e-mail diferente do site da empresa. Revisar.' };
   return { status: 'pending_review', legal_basis: 'needs_review', role: false, notes: 'Endereço no domínio da empresa mas sem cara de caixa comercial. Revisar.' };
@@ -48,38 +56,55 @@ export function evaluateLegalBasis(email, companyDomain, sourceType) {
  * Monta os statements que gravam os contatos encontrados para uma empresa.
  * Retorna { stmts, best } — best = melhor canal (para o score) sem tocar o banco.
  */
-export function contactStatements(ctx, company, analysis, suppressed = new Set()) {
+/** Primeiro nome só quando ele está escrito na página (nunca deduzido só do endereço). */
+export function personNameFor(email, text) {
+  const local = String(email || '').split('@')[0].toLowerCase();
+  const first = local.split(/[._-]/)[0].replace(/[^a-z]/g, '');
+  if (first.length < 3 || !text) return null;
+  for (const m of String(text).matchAll(/\b([A-ZÀ-Ý][a-zà-ÿ]{2,20})\b/g)) {
+    if (normalize(m[1]) === first) return m[1];
+  }
+  return null;
+}
+
+export function contactStatements(ctx, company, analysis, suppressed = new Set(), { allowNamed = false } = {}) {
   const ts = nowIso();
   const signals = analysis?.signals || {};
   const derived = signals.derived || {};
   const found = []; // {type, value, source_type, source_url, evidence}
-  for (const e of derived.emails || []) found.push({ type: 'email', value: e, source_type: 'website', source_url: analysis.final_url || company.website, evidence: signals.mailto?.includes(e) ? 'link mailto na página inicial' : 'texto da página inicial' });
+  const pageText = `${signals.text || ''} ${signals.extra_text || ''}`;
+  for (const e of derived.emails || []) found.push({ type: 'email', value: e, source_type: 'website', source_url: analysis.final_url || company.website, evidence: signals.mailto?.includes(e) ? 'link mailto no site' : 'texto do site' });
   if (company.email) found.push({ type: 'email', value: company.email, source_type: company.source, source_url: company.source_url, evidence: 'tag de e-mail na fonte' });
   if (signals.forms > 0) found.push({ type: 'form', value: analysis.final_url || company.website, source_type: 'website', source_url: analysis.final_url || company.website, evidence: `${signals.forms} formulário(s) na página inicial` });
   if (company.phone) found.push({ type: 'phone', value: company.phone, source_type: company.source, source_url: company.source_url, evidence: 'telefone na fonte' });
-  if (signals.whatsapp_links > 0) found.push({ type: 'whatsapp', value: 'link na página inicial', source_type: 'website', source_url: analysis.final_url || company.website, evidence: `${signals.whatsapp_links} link(s) de WhatsApp` });
+  for (const n of signals.whatsapp_numbers || []) found.push({ type: 'whatsapp', value: n, source_type: 'website', source_url: analysis.final_url || company.website, evidence: 'link de WhatsApp no site' });
+  if (company.whatsapp && !(signals.whatsapp_numbers || []).includes(company.whatsapp)) found.push({ type: 'whatsapp', value: company.whatsapp, source_type: company.source, source_url: company.source_url, evidence: 'WhatsApp na fonte' });
 
   const stmts = [];
   const seen = new Set();
   const evaluated = [];
   for (const f of found) {
-    const norm = f.type === 'email' ? f.value.toLowerCase().trim() : f.type === 'phone' ? f.value.replace(/\D/g, '') : f.value;
+    const norm = f.type === 'email' ? f.value.toLowerCase().trim() : (f.type === 'phone' || f.type === 'whatsapp') ? (normalizePhone(f.value) || f.value.replace(/\D/g, '')) : f.value;
     const key = `${f.type}:${norm}`;
     if (!norm || seen.has(key)) continue;
     seen.add(key);
     let ev = { status: 'valid', legal_basis: 'legitimate_interest_b2b', notes: 'Canal institucional publicado pela empresa.', role: false };
     if (f.type === 'email') {
-      ev = evaluateLegalBasis(norm, company.domain, f.source_type);
+      ev = evaluateLegalBasis(norm, company.domain, f.source_type, { allowNamed });
       if (suppressed.has(norm) || suppressed.has(norm.split('@')[1])) ev = { ...ev, status: 'suppressed', notes: 'Na lista de supressão (descadastro, recusa ou bounce).' };
+    } else if ((f.type === 'phone' || f.type === 'whatsapp') && suppressed.has(norm)) {
+      ev = { ...ev, status: 'suppressed', notes: 'Na lista de supressão.' };
     }
-    evaluated.push({ ...f, norm, ev });
+    const person = f.type === 'email' && ev.named ? personNameFor(norm, pageText) : null;
+    evaluated.push({ ...f, norm, ev, person });
     stmts.push(ctx.stmt(
-      `INSERT INTO contacts (company_id, type, value, normalized_value, is_role_address, legal_basis, legal_basis_notes, status, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?)
+      `INSERT INTO contacts (company_id, type, value, normalized_value, is_role_address, person_name, legal_basis, legal_basis_notes, status, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(company_id, type, normalized_value) DO UPDATE SET
          status = CASE WHEN contacts.status IN ('suppressed','invalid') THEN contacts.status ELSE excluded.status END,
+         person_name = COALESCE(excluded.person_name, contacts.person_name),
          legal_basis = excluded.legal_basis, legal_basis_notes = excluded.legal_basis_notes, updated_at = excluded.updated_at`,
-      company.id, f.type, f.value, norm, ev.role ? 1 : 0, ev.legal_basis, ev.notes, ev.status, ts, ts,
+      company.id, f.type, f.value, norm, ev.role ? 1 : 0, person, ev.legal_basis, ev.notes, ev.status, ts, ts,
     ));
     stmts.push(ctx.stmt(
       `INSERT OR IGNORE INTO contact_sources (contact_id, source_type, source_url, evidence, collected_at)
@@ -88,11 +113,12 @@ export function contactStatements(ctx, company, analysis, suppressed = new Set()
     ));
   }
   const rank = (x) => {
-    if (x.type === 'email' && x.ev.status === 'valid') return 100 + (x.source_type === 'website' ? 1 : 0);
+    // quem decide primeiro: e-mail nominal publicado (se permitido) > caixa institucional
+    if (x.type === 'email' && x.ev.status === 'valid') return (x.ev.named ? 110 : 100) + (x.source_type === 'website' ? 1 : 0);
     if (x.type === 'email' && x.ev.status === 'pending_review') return 60;
     if (x.type === 'form') return 40;
+    if (x.type === 'whatsapp') return 25;
     if (x.type === 'phone') return 20;
-    if (x.type === 'whatsapp') return 15;
     return 0;
   };
   const best = evaluated.filter((x) => x.ev.status !== 'suppressed' && x.ev.status !== 'invalid').sort((a, b) => rank(b) - rank(a))[0] || null;

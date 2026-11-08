@@ -13,6 +13,9 @@ import { findAppointment, availableSlots, bookSlot, cancelBooking, bookingPageHt
 import { createBookingOffer } from './agents/closer.js';
 import { validateSender } from './agents/copywriter.js';
 import { CLASSES } from './agents/inbox.js';
+import { registerToday } from './api_today.js';
+import { auditUrl, ensureAuditToken } from './agents/copywriter.js';
+import { waLink, igProfile, telLink, normalizePhone, formatPhone } from './channels.js';
 
 const r = new Router();
 const PUBLIC = { public: true };
@@ -210,7 +213,10 @@ r.add('GET', '/api/dashboard', async (ctx) => {
       SUM(CASE WHEN direction='out' AND kind='initial' AND status='simulated' THEN 1 ELSE 0 END) AS simulated,
       SUM(CASE WHEN direction='out' AND kind='followup' AND status IN ('sent','simulated') THEN 1 ELSE 0 END) AS followups,
       SUM(CASE WHEN direction='in' THEN 1 ELSE 0 END) AS received FROM messages`),
-    ctx.stmt(`SELECT COUNT(DISTINCT lead_id) AS n FROM messages WHERE direction = 'in' AND classification NOT IN ('auto','bounce')`),
+    ctx.stmt(`SELECT COUNT(DISTINCT lead_id) AS n, (SELECT COUNT(DISTINCT lead_id) FROM messages WHERE kind = 'manual_touch') AS manual,
+              (SELECT COUNT(DISTINCT lead_id) FROM messages WHERE direction = 'out' AND ((kind = 'initial' AND status IN ('sent','simulated')) OR kind = 'manual_touch')) AS contacted_leads,
+              (SELECT COUNT(*) FROM tasks WHERE status = 'open' AND due_date <= ?) AS tasks_open
+              FROM messages WHERE direction = 'in' AND classification NOT IN ('auto','bounce')`, nowIso().slice(0, 10)),
     ctx.stmt(`SELECT COUNT(*) AS booked, SUM(CASE WHEN starts_at >= ? THEN 1 ELSE 0 END) AS upcoming FROM appointments WHERE status = 'booked'`, nowIso()),
     ctx.stmt(`SELECT h.created_at, h.from_stage, h.to_stage, h.reason, h.actor, c.name, c.id AS company_id
               FROM lead_stage_history h JOIN leads l ON l.id = h.lead_id JOIN companies c ON c.id = l.company_id ORDER BY h.id DESC LIMIT 12`),
@@ -218,7 +224,7 @@ r.add('GET', '/api/dashboard', async (ctx) => {
     ctx.stmt(`SELECT c.segment, COUNT(*) AS n FROM leads l JOIN companies c ON c.id = l.company_id WHERE l.priority IN ('alta','media','baixa') GROUP BY c.segment ORDER BY n DESC LIMIT 6`),
   ])).map((x) => x.results);
   const c = counts[0], m = msgs[0];
-  const contacted = (m.sent || 0) + (m.simulated || 0);
+  const contacted = replied[0].contacted_leads || 0;
   return json({
     mode: settings.outreach.mode === 'live' && settings.outreach.live_approved_at ? 'live' : 'simulation',
     system: settings.system,
@@ -226,6 +232,7 @@ r.add('GET', '/api/dashboard', async (ctx) => {
       companies: c.companies, blocked: c.blocked, exclusion_review: c.exclusion_review, qualified: c.qualified, high: c.high,
       researching: c.researching, pending: c.pending, waiting: c.waiting, contacted_real: m.sent || 0, contacted_simulated: m.simulated || 0,
       followups: m.followups || 0, received: m.received || 0, replied_leads: replied[0].n, interested: c.interested,
+      contacted_manual: replied[0].manual || 0, contacted_leads: contacted, tasks_open: replied[0].tasks_open || 0,
       meetings: appts[0].booked || 0, upcoming_meetings: appts[0].upcoming || 0, converted: c.converted,
       needs_review: c.needs_review, conversations_review: c.conv_review,
       response_rate: contacted ? replied[0].n / contacted : null,
@@ -279,11 +286,21 @@ r.add('GET', '/api/companies/:id', async (ctx, req, p) => {
     ctx.stmt(`SELECT ct.*, (SELECT json_group_array(json_object('source_type', s.source_type, 'source_url', s.source_url, 'evidence', s.evidence, 'collected_at', s.collected_at))
               FROM contact_sources s WHERE s.contact_id = ct.id) AS sources FROM contacts ct WHERE ct.company_id = ? ORDER BY ct.is_primary DESC, ct.id`, id),
     ctx.stmt('SELECT * FROM lead_stage_history WHERE lead_id = ? ORDER BY id DESC LIMIT 50', lead?.id ?? -1),
-    ctx.stmt('SELECT id, conversation_id, direction, kind, status, subject, body_text, to_addr, from_addr, classification, classification_reason, needs_review, sent_at, received_at, created_at, error FROM messages WHERE lead_id = ? ORDER BY id', lead?.id ?? -1),
+    ctx.stmt('SELECT id, conversation_id, direction, channel, kind, status, subject, body_text, to_addr, from_addr, classification, classification_reason, needs_review, sent_at, received_at, created_at, error FROM messages WHERE lead_id = ? ORDER BY id', lead?.id ?? -1),
     ctx.stmt('SELECT * FROM appointments WHERE lead_id = ? ORDER BY id DESC', lead?.id ?? -1),
   ])).map((x) => x.results);
   const a = analysis[0];
+  const wa = normalizePhone(company.whatsapp);
+  const ph = normalizePhone(company.phone);
+  const token = lead && company.exclusion_status !== 'block' ? await ensureAuditToken(ctx, lead.id, lead.audit_token) : null;
   return json({
+    channels: {
+      whatsapp: wa ? { display: formatPhone(wa), link: waLink(wa) } : null,
+      instagram: company.instagram ? { handle: company.instagram, link: igProfile(company.instagram) } : null,
+      phone: ph ? { display: formatPhone(ph), link: telLink(ph) } : null,
+      audit_url: auditUrl(ctx.env, token),
+      audit_views: lead?.audit_views || 0, audit_last_viewed_at: lead?.audit_last_viewed_at || null,
+    },
     company: { ...company, source_tags: safeJson(company.source_tags, {}) },
     lead,
     analysis: a ? { ...a, signals: safeJson(a.signals, {}), findings: safeJson(a.findings, []), psi: safeJson(a.psi) } : null,
@@ -323,7 +340,7 @@ r.add('POST', '/api/companies/:id/approve', async (ctx, req, p, s) => {
   const ts = nowIso();
   await ctx.batch([
     ctx.stmt("UPDATE companies SET exclusion_status = 'approved', exclusion_reason = COALESCE(exclusion_reason,'') || ' · liberada manualmente', updated_at = ? WHERE id = ?", ts, id),
-    ctx.stmt('UPDATE leads SET needs_review = 0, updated_at = ? WHERE company_id = ?', ts, id),
+    ctx.stmt("UPDATE leads SET needs_review = 0, priority = CASE WHEN score >= 80 THEN 'alta' WHEN score >= 60 THEN 'media' WHEN score >= 40 THEN 'baixa' ELSE 'nao_automatico' END, updated_at = ? WHERE company_id = ?", ts, id),
     auditStmt(ctx, s.id, 'company_approved', 'company', id),
   ]);
   return json({ ok: true });
@@ -432,15 +449,13 @@ r.add('GET', '/api/conversations/:id', async (ctx, req, p) => {
   return json({ conversation: conv, messages });
 });
 
-r.add('POST', '/api/conversations/:id/reply', async (ctx, req, p, s) => {
-  const id = v.int(p.id, { min: 1 });
-  const b = await readJson(req);
-  const body = v.str(b.body, { name: 'Mensagem', min: 2, max: 8000, required: true });
+async function sendReply(ctx, s, id, body) {
   const settings = await getSettings(ctx);
   const conv = await ctx.first('SELECT cv.*, ct.normalized_value AS to_addr FROM conversations cv LEFT JOIN contacts ct ON ct.id = cv.contact_id WHERE cv.id = ?', id);
   if (!conv) throw new HttpError(404, 'Conversa não encontrada');
   const lastIn = await ctx.first("SELECT * FROM messages WHERE conversation_id = ? AND direction = 'in' ORDER BY id DESC LIMIT 1", id);
   const to = lastIn?.from_addr || conv.to_addr;
+  if (!to) throw new HttpError(400, 'Essa conversa não tem e-mail para responder.');
   const { isSuppressed } = await import('./exclusion.js');
   const sup = await isSuppressed(ctx, to);
   if (sup) throw new HttpError(400, `Destinatário na lista de supressão (${sup}). Não é possível enviar.`);
@@ -459,8 +474,15 @@ r.add('POST', '/api/conversations/:id/reply', async (ctx, req, p, s) => {
               VALUES (?, ?, 'out', 'manual_reply', 'sent', ?, ?, ?, ?, ?, ?, ?, ?)`, id, conv.lead_id, subject, body, to, settings.sender.email, sent.id, ts, ts, ts),
     ctx.stmt("UPDATE conversations SET status = 'open', last_message_at = ?, gmail_thread_id = COALESCE(gmail_thread_id, ?), updated_at = ? WHERE id = ?", ts, sent.threadId, ts, id),
     ctx.stmt('UPDATE messages SET needs_review = 0 WHERE conversation_id = ?', id),
+    ctx.stmt("UPDATE tasks SET status = 'done', done_at = ?, updated_at = ? WHERE conversation_id = ? AND kind = 'reply' AND status = 'open'", ts, ts, id),
     auditStmt(ctx, s.id, 'manual_reply_sent', 'conversation', id),
   ]);
+}
+
+r.add('POST', '/api/conversations/:id/reply', async (ctx, req, p, s) => {
+  const id = v.int(p.id, { min: 1 });
+  const b = await readJson(req);
+  await sendReply(ctx, s, id, v.str(b.body, { name: 'Mensagem', min: 2, max: 8000, required: true }));
   return json({ ok: true });
 });
 
@@ -751,11 +773,19 @@ r.add('GET', '/api/settings', async (ctx) => {
   });
 });
 
+function parseDayList(val) {
+  const arr = (Array.isArray(val) ? val : String(val ?? '').split(',')).map((x) => Number(String(x).trim())).filter((x) => Number.isInteger(x));
+  const out = [...new Set(arr)].sort((a, b) => a - b);
+  if (!out.length || out.length > 4 || out.some((d) => d < 1 || d > 45)) throw new HttpError(400, 'Dias da sequência: de 1 a 4 números entre 1 e 45, ex.: 4, 12');
+  return out;
+}
+
 const SETTINGS_VALIDATORS = {
   timezone: (b) => { const tz = v.str(b, { name: 'Fuso', max: 60, required: true }); try { new Intl.DateTimeFormat('pt-BR', { timeZone: tz }); } catch { throw new HttpError(400, 'Fuso horário inválido'); } return tz; },
   sender: (b) => ({
     name: v.str(b.name, { name: 'Nome', max: 80 }), company: v.str(b.company, { name: 'Empresa', max: 80 }), email: v.email(b.email, 'E-mail'),
     website: v.str(b.website, { name: 'Site', max: 200 }), phone: v.str(b.phone, { name: 'Telefone', max: 40 }), city: v.str(b.city, { name: 'Cidade', max: 80 }), signature: v.str(b.signature, { max: 400 }),
+    instagram: v.str(b.instagram, { name: 'Instagram', max: 80 }).replace(/^@/, '').replace(/^https?:\/\/(www\.)?instagram\.com\//i, '').replace(/\/.*$/, '').slice(0, 30),
   }),
   services: (b) => Object.fromEntries(Object.keys(SERVICES).map((k) => [k, b[k] !== false])),
   outreach: (b, cur) => ({
@@ -764,8 +794,9 @@ const SETTINGS_VALIDATORS = {
     per_segment_daily_limit: v.int(b.per_segment_daily_limit, { name: 'Limite por segmento', min: 1, max: 200 }),
     min_minutes_between: v.int(b.min_minutes_between, { name: 'Intervalo', min: 2, max: 240 }),
     days: v.days(b.days), start: v.hm(b.start, 'Início do envio'), end: v.hm(b.end, 'Fim do envio'),
-    followup_after_days: v.int(b.followup_after_days, { name: 'Dias até follow-up', min: 2, max: 30 }),
-    max_followups: v.int(b.max_followups, { name: 'Máximo de follow-ups', min: 0, max: 2 }),
+    email_followup_days: parseDayList(b.email_followup_days),
+    lost_after_days: v.int(b.lost_after_days, { name: 'Dias até perdido', min: 1, max: 60, def: 7 }),
+    allow_named_contacts: v.bool(b.allow_named_contacts),
     min_score: v.int(b.min_score, { name: 'Pontuação mínima', min: 40, max: 100 }),
   }),
   closer: (b) => ({ auto_reply_meeting: v.bool(b.auto_reply_meeting), auto_reply_positive: v.bool(b.auto_reply_positive), auto_reply_info: v.bool(b.auto_reply_info) }),
@@ -778,6 +809,12 @@ const SETTINGS_VALIDATORS = {
   limits: (b) => Object.fromEntries(Object.entries(DEFAULT_SETTINGS.limits).map(([k, def]) => [k, v.int(b[k], { name: k, min: 0, max: k.startsWith('d1_rows_read') ? 5_000_000 : k.startsWith('d1_rows_written') ? 100_000 : k.startsWith('worker') ? 100_000 : 100_000, def })])),
   investigator: (b) => ({ use_pagespeed: v.bool(b.use_pagespeed), max_page_kb: v.int(b.max_page_kb, { name: 'Tamanho máx.', min: 50, max: 2000 }), cnpj_lookup: v.bool(b.cnpj_lookup) }),
   notifications: (b) => ({ email_admin: v.bool(b.email_admin) }),
+  planner: (b, cur) => ({
+    ...cur,
+    max_cards: v.int(b.max_cards, { name: 'Cartões por dia', min: 3, max: 40 }),
+    new_manual_per_day: v.int(b.new_manual_per_day, { name: 'Novos contatos manuais por dia', min: 0, max: 30 }),
+    digest_email: v.bool(b.digest_email),
+  }),
 };
 
 r.add('PUT', '/api/settings/:key', async (ctx, req, p, s) => {
@@ -882,5 +919,7 @@ r.add('GET', '/api/export', async (ctx, req, p, s) => {
   await auditStmt(ctx, s.id, 'export').run();
   return json(out, 200, { 'content-disposition': `attachment; filename="aureon-backup-${nowIso().slice(0, 10)}.json"` });
 });
+
+registerToday(r, { sendReply });
 
 export const router = r;

@@ -39,6 +39,14 @@
 
 Cada mudança de etapa grava `lead_stage_history` (quem, quando, por quê).
 
+## Rotina diária (tela Hoje)
+
+- O **Planner** (`src/agents/planner.js`) roda às 06:30 e monta a tabela `tasks`: responder (100), quentes (90), reuniões (80), toques da sequência (60–70) e decisões (30). Cada tarefa tem chave única por empresa/passo/dia, então montar de novo não duplica. Eventos criam tarefas na hora: resposta recebida (Inbox) e abertura da análise (`/analise/:token/visto`).
+- **Toques manuais**: o sistema escolhe o canal (WhatsApp → Instagram → ligação, sem repetir o anterior), escreve o texto e gera o link oficial (`wa.me` com texto, `ig.me/m`, `tel:`). Quem envia é você. Por isso não há violação das regras da Meta, que só permitem mensagem de empresa a quem escreveu antes (Instagram) ou com autorização prévia e modelo aprovado (WhatsApp Business).
+- **Supressão em todos os canais**: descadastro, recusa, falha de entrega ou "Não contatar" gravam o e-mail, o telefone/WhatsApp e o @ do Instagram na lista de supressão.
+- **Mini-auditoria** (`/analise/:token`): página pública só com observações do site da empresa (nada interno, nada pessoal), fora do Google (`noindex`). A abertura conta por um sinal enviado pela própria página depois de 4 s visível, para ignorar robôs de segurança de e-mail.
+- **Confirmações e lembretes de reunião** saem pelo Gmail mesmo em modo simulação: são mensagens transacionais para quem pediu a reunião, não prospecção.
+
 ## Lista de exclusão (contrato Arco)
 
 Aplicada em 4 pontos: ao descobrir (nome, categoria OSM, domínio, e-mail), depois de ler o site (texto + CNAE do CNPJ), ao preparar a mensagem e imediatamente antes de cada envio.
@@ -62,7 +70,9 @@ Aplicada em 4 pontos: ao descobrir (nome, categoria OSM, domínio, e-mail), depo
 ## LGPD e comunicação comercial
 
 - Só dados de empresas e canais **publicados pela própria empresa**. O quadro societário retornado pela consulta de CNPJ é descartado.
-- Base legal registrada por contato: **legítimo interesse (art. 7º, IX)** apenas para e-mail institucional (contato@, comercial@…) no domínio da própria empresa. E-mails pessoais, de provedores gratuitos ou de outro domínio ficam **pendentes de revisão** e não recebem envio automático. Não se presume consentimento.
+- Base legal registrada por contato: **legítimo interesse (art. 7º, IX)** para e-mail institucional (contato@, comercial@…) no domínio da própria empresa. E-mails de provedores gratuitos ou de outro domínio ficam **pendentes de revisão** e não recebem envio automático. Não se presume consentimento.
+- **E-mail nominal** (joao@empresa.com.br) só é usado se você ligar a opção, e só quando está **publicado pela própria empresa no site dela** e no domínio dela. O contato registra a avaliação de balanceamento: endereço profissional ligado à função, sem dado sensível, finalidade B2B explícita e descadastro em toda mensagem. O nome usado na saudação precisa estar escrito na página; nunca é deduzido só do endereço. Não há adivinhação de e-mails, cruzamento com sócios do CNPJ nem uso do LinkedIn.
+- WhatsApp, Instagram e telefone vêm do site da empresa ou do OpenStreetMap e são usados só por você, manualmente, com a opção "Não contatar" sempre à mão.
 - Toda mensagem identifica o remetente, diz que é contato comercial, não inventa relacionamento, não promete resultado e traz descadastro por resposta ou link (incluindo o cabeçalho `List-Unsubscribe` de um clique).
 - Descadastro, recusa e falha de entrega entram na lista de supressão permanente e cancelam rascunhos pendentes.
 - Exclusão de dados de uma empresa a pedido: **Empresas → Ações → Excluir dados**.

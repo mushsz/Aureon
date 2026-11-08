@@ -2,11 +2,12 @@
 // dentro da janela, dos limites e só depois da aprovação explícita do modo real.
 // Em modo simulação, nada sai: a mensagem fica registrada como "simulated".
 
-import { nowIso, inWindow, localDate, zonedToUtc, zonedParts } from '../util.js';
+import { nowIso, inWindow, localDate, zonedToUtc, zonedParts, safeJson } from '../util.js';
 import { getSettings, stageStmts } from '../db.js';
 import { loadRules, checkExclusion, subjectFromCompany, isSuppressed } from '../exclusion.js';
 import { buildMime, gmailSend } from '../google.js';
-import { composeFollowup, unsubscribeUrl } from './copywriter.js';
+import { composeSequenceEmail, unsubscribeUrl, auditUrl } from './copywriter.js';
+import { createBookingOffer } from './closer.js';
 
 /** Início do dia local (no fuso) em UTC ISO, para contar envios "de hoje". */
 export function localDayStartIso(now, tz) {
@@ -113,42 +114,62 @@ export async function runOutreach(ctx, batch = 1) {
   return { sent: done, blocked_by: reasons[0] || null };
 }
 
-/** Follow-up: um por vez, só para quem não respondeu, no mesmo fio do Gmail. */
+/**
+ * Sequência de e-mails: 2º toque (novo ponto + link da agenda) e 3º (encerramento), contados a partir
+ * do primeiro e-mail. Só para quem não respondeu, no mesmo fio do Gmail. Depois do último, sem
+ * resposta em `lost_after_days`, o lead vai para "perdido".
+ */
 export async function runFollowup(ctx, batch = 1) {
   const settings = await getSettings(ctx);
   if (!settings.agents.followup) return { sent: 0, blocked_by: 'agente Follow-up desativado' };
   const o = settings.outreach;
-  const cutoff = new Date(ctx.now.getTime() - o.followup_after_days * 86_400_000).toISOString();
+  const days = (Array.isArray(o.email_followup_days) && o.email_followup_days.length ? o.email_followup_days : [4, 12]).map(Number);
+  const total = days.length;
   const rules = await loadRules(ctx);
+
+  // encerra quem passou da sequência sem responder
+  const lostCut = new Date(ctx.now.getTime() - (+o.lost_after_days || 7) * 86_400_000).toISOString();
+  const silent = await ctx.all(
+    `SELECT * FROM leads WHERE stage = 'contatado' AND contact_id IS NOT NULL AND followup_count >= ? AND last_inbound_at IS NULL
+       AND last_contact_at <= ? AND (last_manual_at IS NULL OR last_manual_at <= ?) LIMIT 20`, total, lostCut, lostCut,
+  );
+  if (silent.length) await ctx.batch(silent.flatMap((l) => stageStmts(ctx, l, 'perdido', 'Sem resposta depois da sequência', 'followup', { lost_reason: 'Sem resposta' })));
+
+  const candidates = await ctx.all(
+    `SELECT l.id AS lead_id, l.stage, l.contact_id, l.followup_count, l.audit_token, ct.status AS contact_status, ct.normalized_value AS to_addr, ct.person_name,
+            cv.id AS conversation_id, cv.gmail_thread_id, cv.subject AS conv_subject,
+            (SELECT MIN(sent_at) FROM messages WHERE lead_id = l.id AND kind = 'initial') AS first_sent_at,
+            (SELECT status FROM messages WHERE lead_id = l.id AND kind = 'initial') AS initial_status, c.*
+     FROM leads l JOIN companies c ON c.id = l.company_id JOIN contacts ct ON ct.id = l.contact_id
+     JOIN conversations cv ON cv.lead_id = l.id
+     WHERE l.stage = 'contatado' AND l.followup_count < ? AND l.last_inbound_at IS NULL
+     ORDER BY l.last_contact_at LIMIT 25`, total,
+  );
+  const due = candidates.filter((r) => r.first_sent_at && new Date(r.first_sent_at).getTime() + days[r.followup_count] * 86_400_000 <= ctx.now.getTime());
   let done = 0;
-  for (let i = 0; i < batch; i++) {
-    const row = await ctx.first(
-      `SELECT l.id AS lead_id, l.stage, l.contact_id, l.followup_count, ct.status AS contact_status, ct.normalized_value AS to_addr,
-              cv.id AS conversation_id, cv.gmail_thread_id, cv.subject AS conv_subject,
-              (SELECT MIN(sent_at) FROM messages WHERE lead_id = l.id AND kind = 'initial') AS first_sent_at,
-              (SELECT status FROM messages WHERE lead_id = l.id AND kind = 'initial') AS initial_status, c.*
-       FROM leads l JOIN companies c ON c.id = l.company_id JOIN contacts ct ON ct.id = l.contact_id
-       JOIN conversations cv ON cv.lead_id = l.id
-       WHERE l.stage = 'contatado' AND l.followup_count < ? AND l.last_contact_at <= ? AND l.last_inbound_at IS NULL
-       ORDER BY l.last_contact_at LIMIT 1`, o.max_followups, cutoff,
-    );
-    if (!row) break;
+  for (const row of due.slice(0, batch)) {
     const gate = await sendGate(ctx, settings, { segment: row.segment });
     if (gate) return { sent: done, blocked_by: gate };
     const blocked = await recipientGate(ctx, row, rules);
     if (blocked) {
-      await ctx.batch(stageStmts(ctx, { id: row.lead_id, stage: row.stage }, row.stage, `Follow-up cancelado: ${blocked}`, 'followup', { followup_count: o.max_followups }));
+      await ctx.run('UPDATE leads SET followup_count = ?, updated_at = ? WHERE id = ?', total, nowIso(), row.lead_id);
       continue;
     }
-    // simulação só gera follow-up de quem também foi simulado; envio real só segue fio real
+    // simulação só segue quem foi simulado; envio real só segue fio real
     const live = isLive(settings);
     if (live && (row.initial_status !== 'sent' || !row.gmail_thread_id)) {
-      await ctx.run('UPDATE leads SET followup_count = ?, updated_at = ? WHERE id = ?', o.max_followups, nowIso(), row.lead_id);
+      await ctx.run('UPDATE leads SET followup_count = ?, updated_at = ? WHERE id = ?', total, nowIso(), row.lead_id);
       continue;
     }
     const n = row.followup_count + 1;
+    const isLast = n === total;
     const unsub = await unsubscribeUrl(ctx.env, row.contact_id, row.to_addr);
-    const f = composeFollowup({ company: row, sender: settings.sender, unsubUrl: unsub, firstSentAt: row.first_sent_at, timezone: settings.timezone });
+    const analysis = await ctx.first('SELECT findings FROM lead_analyses WHERE company_id = ? ORDER BY id DESC LIMIT 1', row.id);
+    const bookingLink = isLast ? null : await createBookingOffer(ctx, { id: row.lead_id }, row.conversation_id, settings.timezone);
+    const f = composeSequenceEmail({
+      step: n, isLast, company: row, findings: safeJson(analysis?.findings, []), service: row.service_fit, sender: settings.sender, unsubUrl: unsub,
+      firstSentAt: row.first_sent_at, timezone: settings.timezone, auditLink: auditUrl(ctx.env, row.audit_token), bookingLink, personName: row.person_name,
+    });
     const subject = row.conv_subject?.startsWith('Re:') ? row.conv_subject : `Re: ${row.conv_subject || row.name}`;
     const ins = await ctx.run(
       `INSERT OR IGNORE INTO messages (conversation_id, lead_id, direction, kind, status, template, subject, body_text, to_addr, from_addr, dedupe_key, created_at, updated_at)
@@ -164,7 +185,7 @@ export async function runFollowup(ctx, batch = 1) {
         ctx.stmt('UPDATE conversations SET last_message_at = ?, updated_at = ? WHERE id = ?', r.ts, r.ts, row.conversation_id),
         ctx.stmt('UPDATE leads SET followup_count = ?, last_contact_at = ?, updated_at = ? WHERE id = ?', n, r.ts, r.ts, row.lead_id),
       ]);
-      ctx.log('info', 'followup', `Follow-up ${r.status === 'sent' ? 'enviado' : 'simulado'}: ${row.name}`);
+      ctx.log('info', 'followup', `E-mail ${n + 1} da sequência ${r.status === 'sent' ? 'enviado' : 'simulado'}: ${row.name}`);
       done++;
     } catch (e) {
       // apaga o registro para a próxima execução poder tentar de novo (o job registra o erro)
@@ -172,7 +193,7 @@ export async function runFollowup(ctx, batch = 1) {
       throw e;
     }
   }
-  return { sent: done };
+  return { sent: done, lost: silent.length };
 }
 
 export { localDate };

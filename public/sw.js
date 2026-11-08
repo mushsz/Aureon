@@ -1,7 +1,7 @@
 // Service worker: guarda só a casca do app para abrir rápido e offline.
 // Nunca guarda respostas da API (dados e sessão ficam sempre no servidor).
-const CACHE = 'aureon-shell-v1';
-const SHELL = ['/', '/index.html', '/app.css', '/js/main.js', '/js/core.js', '/js/views.js', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/apple-touch-icon.png'];
+const CACHE = 'aureon-shell-v2';
+const SHELL = ['/', '/index.html', '/app.css', '/js/main.js', '/js/core.js', '/js/views.js', '/js/today.js', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

@@ -1,6 +1,6 @@
 // Valores padrão: configurações, rotina, serviços, etapas e a lista de exclusão do sistema.
 
-export const SEED_VERSION = 2; // subir quando a lista padrão mudar: as regras novas entram sem duplicar
+export const SEED_VERSION = 3; // subir quando a lista padrão mudar: as regras novas entram sem duplicar
 
 export const STAGES = [
   ['descoberto', 'Descoberto'],
@@ -35,8 +35,9 @@ export const DEFAULT_SETTINGS = {
   agents: {
     finder: true, investigator: true, scorer: true, copywriter: true,
     outreach: true, inbox: true, closer: true, followup: true, report: true,
+    planner: true, scheduler: true,
   },
-  sender: { name: '', company: '', email: '', website: '', phone: '', city: '', signature: '' },
+  sender: { name: '', company: '', email: '', website: '', phone: '', city: '', instagram: '', signature: '' },
   services: Object.fromEntries(Object.keys(SERVICES).map((k) => [k, true])),
   outreach: {
     mode: 'simulation',            // simulation | live
@@ -48,9 +49,19 @@ export const DEFAULT_SETTINGS = {
     days: [1, 2, 3, 4, 5],
     start: '09:00',
     end: '17:00',
-    followup_after_days: 4,
-    max_followups: 1,
+    email_followup_days: [4, 12],  // e-mails 2 e 3 da sequência (dias depois do primeiro); o último é o de encerramento
+    lost_after_days: 7,            // sem resposta depois do último e-mail → perdido
+    allow_named_contacts: false,   // e-mail nominal (joao@empresa) publicado pela própria empresa no site
     min_score: 40,
+  },
+  // Rotina diária no celular (tela Hoje)
+  planner: {
+    max_cards: 12,                 // cartões por dia (~10 minutos)
+    new_manual_per_day: 5,         // empresas sem e-mail abordadas por WhatsApp/Instagram por dia
+    digest_email: true,            // e-mail da manhã com o resumo e o link da tela Hoje
+    // toques manuais: dias depois do primeiro contato e canais em ordem de preferência
+    email_lead_steps: [{ day: 2, channels: ['instagram', 'whatsapp'] }, { day: 6, channels: ['whatsapp', 'phone', 'instagram'] }],
+    manual_lead_steps: [{ day: 0, channels: ['whatsapp', 'instagram', 'phone'] }, { day: 4, channels: ['instagram', 'whatsapp', 'phone'] }, { day: 9, channels: ['phone', 'whatsapp'] }],
   },
   closer: {
     auto_reply_meeting: false,     // responder pedidos de reunião com o link de agenda
@@ -93,12 +104,14 @@ export const DEFAULT_SETTINGS = {
 // agendador central decide o que roda, conforme estas linhas da tabela schedules.
 export const DEFAULT_SCHEDULES = [
   { task: 'discover', label: 'Descobrir novas empresas', start_time: '08:00', end_time: '08:59', interval_minutes: 10, batch_size: 1 },
-  { task: 'investigate', label: 'Investigar empresas encontradas', start_time: '09:00', end_time: '09:59', interval_minutes: 1, batch_size: 2 },
-  { task: 'score', label: 'Encontrar contatos e classificar', start_time: '10:00', end_time: '10:59', interval_minutes: 2, batch_size: 15 },
+  { task: 'investigate', label: 'Investigar empresas encontradas', start_time: '09:00', end_time: '10:29', interval_minutes: 1, batch_size: 1 },
+  { task: 'score', label: 'Encontrar contatos e classificar', start_time: '10:30', end_time: '10:59', interval_minutes: 2, batch_size: 15 },
   { task: 'prepare', label: 'Preparar novos contatos', start_time: '11:00', end_time: '11:59', interval_minutes: 2, batch_size: 10 },
   { task: 'outreach', label: 'Executar prospecção autorizada', start_time: '13:00', end_time: '13:59', interval_minutes: 1, batch_size: 1 },
   { task: 'inbox', label: 'Verificar respostas', start_time: '08:00', end_time: '19:00', interval_minutes: 15, batch_size: 10 },
-  { task: 'followup', label: 'Executar follow-ups elegíveis', start_time: '15:00', end_time: '15:59', interval_minutes: 1, batch_size: 1 },
+  { task: 'followup', label: 'Sequência de e-mails (2º e 3º toques)', start_time: '15:00', end_time: '15:59', interval_minutes: 1, batch_size: 1 },
+  { task: 'plan', label: 'Montar a rotina do dia (tela Hoje)', start_time: '06:30', end_time: null, interval_minutes: 0, batch_size: 1 },
+  { task: 'reminders', label: 'Lembretes de reunião', start_time: '06:00', end_time: '22:00', interval_minutes: 15, batch_size: 1, days: '0,1,2,3,4,5,6' },
   { task: 'report', label: 'Atualizar relatórios e limpeza', start_time: '17:00', end_time: null, interval_minutes: 0, batch_size: 1 },
 ];
 

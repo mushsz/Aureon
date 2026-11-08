@@ -1,10 +1,13 @@
 // Casca do app: login/instalação, navegação (hash), registro do service worker.
 import { api, html, raw, mount, icon, markSvg, setCsrf, setMeta, toast, fail, formData, busy, closeSheet } from './core.js';
 import * as V from './views.js';
+import { today } from './today.js';
 
 const app = document.getElementById('app');
 const ROUTES = {
-  '': ['Início', V.dashboard, 'home'],
+  '': ['Hoje', today, 'sun'],
+  hoje: ['Hoje', today, 'sun'],
+  resultados: ['Resultados', V.dashboard, 'chart'],
   empresas: ['Empresas', V.companies, 'building'],
   pipeline: ['Pipeline', V.pipeline, 'pipeline'],
   conversas: ['Conversas', V.conversations, 'chat'],
@@ -15,12 +18,13 @@ const ROUTES = {
   configuracoes: ['Configurações', V.settings, 'gear'],
   uso: ['Uso e limites', V.usage, 'gauge'],
 };
-const TABS = ['', 'empresas', 'pipeline', 'conversas', 'mais'];
-const SIDE = ['', 'empresas', 'pipeline', 'conversas', 'agenda', null, 'automacao', 'exclusao', 'configuracoes', 'uso'];
-const MORE = new Set(['mais', 'agenda', 'automacao', 'exclusao', 'configuracoes', 'uso']);
+const TABS = ['', 'resultados', 'empresas', 'conversas', 'mais'];
+const SIDE = ['', 'resultados', 'empresas', 'pipeline', 'conversas', 'agenda', null, 'automacao', 'exclusao', 'configuracoes', 'uso'];
+const MORE = new Set(['mais', 'pipeline', 'agenda', 'automacao', 'exclusao', 'configuracoes', 'uso']);
 
 let user = null;
 let reviewCount = 0;
+let taskCount = 0;
 
 function parseHash() {
   const h = location.hash.replace(/^#\/?/, '');
@@ -28,11 +32,12 @@ function parseHash() {
   const [section = '', id] = path.split('/');
   const params = Object.fromEntries(new URLSearchParams(query));
   if (id) params.id = id;
-  return { section: ROUTES[section] ? section : '', params };
+  return { section: ROUTES[section] ? (section === 'hoje' ? '' : section) : '', params };
 }
 
 function shell(section) {
-  const badge = (k) => (k === 'conversas' && reviewCount ? html`<span class="dot">${reviewCount > 99 ? '99+' : reviewCount}</span>` : '');
+  const n = (k) => (k === 'conversas' ? reviewCount : k === '' ? taskCount : 0);
+  const badge = (k) => (n(k) ? html`<span class="dot">${n(k) > 99 ? '99+' : n(k)}</span>` : '');
   mount(app, html`<div class="app">
     <nav class="sidebar" aria-label="Navegação">
       <div class="brand"><span class="brand-mark">${markSvg}</span><span>Aureon<br><small>Sales Engine</small></span></div>
@@ -62,8 +67,22 @@ async function refreshBadge() {
   try {
     const d = await api('GET', '/api/dashboard');
     const n = (d.metrics.needs_review || 0) + (d.metrics.conversations_review || 0);
-    if (n !== reviewCount) { reviewCount = n; const { section } = parseHash(); const cur = app.querySelector('#view')?.innerHTML; shell(section); if (cur) document.getElementById('view').innerHTML = cur; }
+    const t = d.metrics.tasks_open || 0;
+    if (n !== reviewCount || t !== taskCount) { reviewCount = n; taskCount = t; updateBadges(); }
   } catch { /* silencioso */ }
+}
+
+// Atualiza só os selos das abas (sem redesenhar a tela, que perderia os cliques já ligados)
+function updateBadges() {
+  const counts = { '#/': taskCount, '#/conversas': reviewCount };
+  app.querySelectorAll('.tabbar a, .sidebar a').forEach((a) => {
+    const href = a.getAttribute('href');
+    const n = counts[href] || 0;
+    let dot = a.querySelector('.dot');
+    if (!n) { dot?.remove(); return; }
+    if (!dot) { dot = document.createElement('span'); dot.className = 'dot'; a.append(dot); }
+    dot.textContent = n > 99 ? '99+' : String(n);
+  });
 }
 
 function authScreen(needsSetup) {

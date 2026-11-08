@@ -15,11 +15,11 @@ const errorBox = (e) => html`<div class="banner bad">${icon('alert')}<div class=
 
 // ======================= DASHBOARD =======================
 export async function dashboard(root) {
-  mount(root, html`${head('Início', 'Resultados reais da prospecção')}${loading}`);
+  mount(root, html`${head('Resultados', 'Números reais da prospecção')}${loading}`);
   let d;
   try { d = await api('GET', '/api/dashboard'); } catch (e) { mount(root, errorBox(e)); return; }
   const m = d.metrics;
-  const contacted = m.contacted_real + m.contacted_simulated;
+  const contacted = m.contacted_leads;
   const funnel = [
     ['Descobertas', m.companies], ['Qualificadas', m.qualified], ['Contatadas', contacted], ['Responderam', m.replied_leads], ['Interessadas', m.interested], ['Reuniões', m.meetings],
   ];
@@ -32,14 +32,14 @@ export async function dashboard(root) {
   const alerts = d.alerts.length ? html`<div class="card flat gap-top"><div class="card-head"><h2>Alertas</h2><button class="btn small ghost" data-act="seen">Marcar como vistos</button></div>
     <div class="stack-s">${d.alerts.map((a) => html`<div class="row small"><span class="chip ${a.level === 'alert' ? 'warn' : 'bad'}">${a.agent}</span><span class="grow">${a.message}</span><span class="faint xs">${fmtRel(a.created_at)}</span></div>`)}</div></div>` : '';
   mount(root, html`
-    ${head('Início', 'Resultados reais da prospecção', html`<span class="chip ${d.mode === 'live' ? 'ok live' : 'info'}"><span class="pip"></span>${d.mode === 'live' ? 'Envio real' : 'Simulação'}</span>`)}
+    ${head('Resultados', 'Números reais da prospecção', html`<span class="chip ${d.mode === 'live' ? 'ok live' : 'info'}"><span class="pip"></span>${d.mode === 'live' ? 'Envio real' : 'Simulação'}</span>`)}
     ${banners}
     <div class="kpis">
       <div class="kpi hero"><span class="label">Reuniões marcadas</span><span class="value">${fmtInt(m.meetings)}</span><span class="sub">${fmtInt(m.upcoming_meetings)} próxima(s) · conversão ${fmtPct(m.conversion_rate)} dos contatados</span></div>
       <div class="kpi"><span class="label">Empresas descobertas</span><span class="value">${fmtInt(m.companies)}</span><span class="sub">${fmtInt(m.blocked)} bloqueadas (saúde/concorrentes)</span></div>
       <div class="kpi"><span class="label">Leads qualificados</span><span class="value">${fmtInt(m.qualified)}</span><span class="sub">${fmtInt(m.high)} com prioridade alta</span></div>
       <div class="kpi"><span class="label">Leads pendentes</span><span class="value">${fmtInt(m.pending)}</span><span class="sub">sem canal ou em revisão · ${fmtInt(m.researching)} em análise</span></div>
-      <div class="kpi"><span class="label">Contatos realizados</span><span class="value">${fmtInt(contacted)}</span><span class="sub">${fmtInt(m.contacted_real)} reais · ${fmtInt(m.contacted_simulated)} simulados</span></div>
+      <div class="kpi"><span class="label">Empresas contatadas</span><span class="value">${fmtInt(contacted)}</span><span class="sub">${fmtInt(m.contacted_real)} e-mails reais · ${fmtInt(m.contacted_simulated)} simulados · ${fmtInt(m.contacted_manual)} por WhatsApp/Instagram</span></div>
       <div class="kpi"><span class="label">Respostas recebidas</span><span class="value">${fmtInt(m.received)}</span><span class="sub">${fmtInt(m.replied_leads)} empresa(s)</span></div>
       <div class="kpi"><span class="label">Taxa de resposta</span><span class="value">${fmtPct(m.response_rate)}</span><span class="sub">respostas ÷ contatados</span></div>
       <div class="kpi"><span class="label">Interessados</span><span class="value">${fmtInt(m.interested)}</span><span class="sub">${fmtInt(m.converted)} convertido(s)</span></div>
@@ -178,12 +178,12 @@ export function openCompany(id, after) {
         pontos: () => sc ? html`<div class="row"><div>${scoreBox(sc.score, sc.priority, true)}</div><div><strong>Prioridade ${PRIORITY[sc.priority]?.[0]}</strong><div class="small muted">Serviço mais compatível: ${META.services[sc.service_fit] || '—'}</div></div></div>
           <div class="stack gap-top">${sc.breakdown.map((b) => html`<div><div class="row between small"><strong>${b.criterion}</strong><span class="num">${b.points}/${b.max}</span></div><div class="bar gap-top-s"><i data-w="${(b.points / b.max) * 100}"></i></div><div class="xs muted gap-top-s">${b.reason}</div></div>`)}</div>
           <details class="gap-top"><summary class="small">Explicação completa</summary><p class="pre small muted gap-top">${sc.explanation}</p></details>` : html`<p class="muted small">Ainda sem pontuação.</p>`,
-        contatos: () => d.contacts.length ? html`<div class="stack">${d.contacts.map((ct) => html`<div class="card flat tight"><div class="row between"><strong class="small">${ct.type === 'email' ? ct.value : ct.type === 'form' ? 'Formulário no site' : ct.type === 'phone' ? ct.value : ct.type === 'whatsapp' ? 'WhatsApp' : ct.value}</strong>
+        contatos: () => html`${channelsBox(d.channels)}${d.contacts.length ? html`<div class="stack gap-top">${d.contacts.map((ct) => html`<div class="card flat tight"><div class="row between"><strong class="small">${ct.type === 'email' ? ct.value : ct.type === 'form' ? 'Formulário no site' : ct.type === 'phone' ? ct.value : ct.type === 'whatsapp' ? 'WhatsApp' : ct.value}</strong>
           <span class="chip ${ct.status === 'valid' ? 'ok' : ct.status === 'suppressed' || ct.status === 'invalid' ? 'bad' : 'warn'}">${{ valid: 'Válido', pending_review: 'Revisar', suppressed: 'Suprimido', invalid: 'Não usar' }[ct.status]}</span></div>
           <p class="xs muted gap-top-s">${ct.legal_basis_notes || ''}</p>
           ${ct.sources.map((so) => html`<p class="xs faint gap-top-s">Fonte: ${so.source_type} · ${so.evidence} ${so.source_url ? html`· <a href="${so.source_url}" target="_blank" rel="noopener noreferrer">ver</a>` : ''} · ${fmtDate(so.collected_at)}</p>`)}</div>`)}</div>`
-          : html`<p class="muted small">Nenhum canal comercial publicado encontrado. O lead fica pendente.</p>`,
-        historico: () => html`${d.messages.length ? html`<p class="section-title">Mensagens</p><div class="thread">${d.messages.map((m) => html`<div class="bubble ${m.direction} ${m.status === 'simulated' || m.status === 'draft' ? 'sim' : ''}"><strong>${m.subject || ''}</strong>\n${m.body_text}<div class="bmeta"><span>${{ draft: 'Rascunho', simulated: 'Simulado', sent: 'Enviado', received: 'Recebido', cancelled: 'Cancelado', sending: 'Enviando', failed: 'Falhou' }[m.status] || m.status}</span><span>${fmtDate(m.sent_at || m.received_at || m.created_at)}</span>${m.classification ? html`<span class="chip">${META.classes[m.classification] || m.classification}</span>` : ''}</div></div>`)}</div>` : ''}
+          : html`<p class="muted small gap-top">Nenhum e-mail ou formulário publicado encontrado.</p>`}`,
+        historico: () => html`${d.messages.length ? html`<p class="section-title">Mensagens</p><div class="thread">${d.messages.map((m) => html`<div class="bubble ${m.direction} ${m.status === 'simulated' || m.status === 'draft' ? 'sim' : ''}"><strong>${m.subject || ''}</strong>\n${m.body_text}<div class="bmeta">${m.channel && m.channel !== 'email' ? html`<span class="chip">${{ whatsapp: 'WhatsApp', instagram: 'Instagram', phone: 'Ligação' }[m.channel] || m.channel} (você)</span>` : ''}<span>${{ draft: 'Rascunho', simulated: 'Simulado', sent: 'Enviado', received: 'Recebido', cancelled: 'Cancelado', sending: 'Enviando', failed: 'Falhou' }[m.status] || m.status}</span><span>${fmtDate(m.sent_at || m.received_at || m.created_at)}</span>${m.classification ? html`<span class="chip">${META.classes[m.classification] || m.classification}</span>` : ''}</div></div>`)}</div>` : ''}
           <p class="section-title">Etapas</p>${d.history.length ? html`<div class="feed">${d.history.map((h) => html`<div class="feed-item"><div class="rail"></div><div><div class="row between small"><strong>${STAGE_LABEL[h.to_stage] || h.to_stage}</strong><span class="faint xs">${fmtDate(h.created_at)}</span></div><div class="xs muted">${h.reason || ''} · ${h.actor}</div></div></div>`)}</div>` : html`<p class="muted small">Sem histórico.</p>`}`,
         acoes: () => html`<div class="stack">
           ${l ? html`<label class="field"><span>Mover para a etapa</span><div class="row"><select name="stage" class="grow">${META.stages.map(([k, lab]) => html`<option value="${k}" ${l.stage === k ? raw('selected') : ''}>${lab}</option>`)}</select><button class="btn" data-act="stage">Mover</button></div></label>` : ''}
@@ -204,6 +204,7 @@ export function openCompany(id, after) {
     const act = async (fn, msg) => { try { await fn(); toast(msg); closeSheet(); after?.(); } catch (e) { fail(e); } };
     on(body, {
       tab: (b) => { tab = b.dataset.v; draw(); },
+      copyaudit: async (b) => { try { await navigator.clipboard.writeText(b.dataset.url); toast('Link da análise copiado'); } catch { window.prompt('Copie o link:', b.dataset.url); } },
       stage: () => act(() => api('POST', `/api/leads/${l.id}/stage`, { stage: body.querySelector('select[name=stage]').value }), 'Etapa atualizada'),
       approve: () => window.confirm('Confirma que esta empresa NÃO é do setor de saúde nem concorrente da Arco?') && act(() => api('POST', `/api/companies/${id}/approve`), 'Empresa liberada'),
       reviewed: () => act(() => api('POST', `/api/leads/${l.id}/review-done`), 'Revisão concluída'),
@@ -452,7 +453,9 @@ export async function settings(root, params) {
         <label class="field"><span>Dias de envio</span></label>${daysPicker('days', o.days)}
         <div class="grid3"><label class="field"><span>Início</span><input type="time" name="start" value="${o.start}" required></label><label class="field"><span>Fim</span><input type="time" name="end" value="${o.end}" required></label>
         <label class="field"><span>Pontuação mínima</span><input type="number" name="min_score" value="${o.min_score}" min="40" max="100"></label></div>
-        <div class="grid2"><label class="field"><span>Follow-up após (dias)</span><input type="number" name="followup_after_days" value="${o.followup_after_days}" min="2" max="30"></label><label class="field"><span>Máx. follow-ups</span><input type="number" name="max_followups" value="${o.max_followups}" min="0" max="2"></label></div>
+        <div class="grid2"><label class="field"><span>Sequência: dias dos e-mails 2 e 3</span><input type="text" name="email_followup_days" value="${(o.email_followup_days || [4, 12]).join(', ')}" inputmode="numeric"></label><label class="field"><span>Sem resposta → perdido após (dias)</span><input type="number" name="lost_after_days" value="${o.lost_after_days || 7}" min="1" max="60"></label></div>
+        ${sw('allow_named_contacts', o.allow_named_contacts, 'Usar e-mail nominal publicado pela própria empresa (ex.: joao@empresa.com.br)')}
+        <p class="hint">Só vale para endereços no domínio da empresa, encontrados no site dela. A base legal (legítimo interesse B2B) fica registrada em cada contato; todo e-mail leva descadastro.</p>
         <button class="btn" type="submit">Salvar envio</button></form></div>
 
     <p class="section-title">Remetente</p>
@@ -460,7 +463,17 @@ export async function settings(root, params) {
       <div class="grid2"><label class="field"><span>Seu nome</span><input type="text" name="name" value="${s.sender.name}" required></label><label class="field"><span>Empresa</span><input type="text" name="company" value="${s.sender.company}"></label></div>
       <div class="grid2"><label class="field"><span>E-mail (o da conta Google)</span><input type="email" name="email" value="${s.sender.email}" required></label><label class="field"><span>Telefone</span><input type="text" name="phone" value="${s.sender.phone}"></label></div>
       <div class="grid2"><label class="field"><span>Site</span><input type="text" name="website" value="${s.sender.website}"></label><label class="field"><span>Cidade</span><input type="text" name="city" value="${s.sender.city}"></label></div>
+      <div class="grid2"><label class="field"><span>Seu Instagram <span class="hint">vai na assinatura</span></span><input type="text" name="instagram" value="${s.sender.instagram || ''}" placeholder="@seuperfil"></label><span></span></div>
+      <p class="hint">O telefone também aparece na análise pública como botão de WhatsApp para falarem com você.</p>
       <button class="btn" type="submit">Salvar remetente</button></form>
+
+    <p class="section-title">Rotina diária (tela Hoje)</p>
+    <form data-form="planner" class="card flat stack">
+      <div class="grid2"><label class="field"><span>Cartões por dia</span><input type="number" name="max_cards" value="${s.planner.max_cards}" min="3" max="40"></label>
+      <label class="field"><span>Novas empresas por WhatsApp/Instagram/dia</span><input type="number" name="new_manual_per_day" value="${s.planner.new_manual_per_day}" min="0" max="30"></label></div>
+      ${sw('digest_email', s.planner.digest_email, 'E-mail da manhã com o resumo e o link da tela Hoje')}
+      <p class="hint">A lista é montada às 06:30 (horário em Automação → "Montar a rotina do dia"). Quem não tem e-mail publicado, mas tem WhatsApp, Instagram ou telefone, entra como toque manual.</p>
+      <button class="btn" type="submit">Salvar rotina</button></form>
 
     <p class="section-title">Respostas automáticas (Closer)</p>
     <form data-form="closer" class="card flat stack"><p class="small muted">Desligado por padrão. Quando ligado, só responde mensagens classificadas com segurança: envia o link da sua agenda e três perguntas de qualificação, sem preços. Tudo o mais fica para você.</p>
@@ -518,6 +531,7 @@ export async function settings(root, params) {
     availability: (f) => put('availability', formData(f)),
     services: (f) => put('services', formData(f)),
     investigator: (f) => put('investigator', formData(f)),
+    planner: (f) => put('planner', formData(f)),
     limits: (f) => put('limits', formData(f)),
     general: async (f) => { const v = formData(f); await put('timezone', { value: v.timezone }); await put('notifications', { email_admin: v.email_admin }); },
     password: async (f) => { try { await api('POST', '/api/me/password', formData(f)); toast('Senha trocada'); f.reset(); } catch (e) { fail(e); } },
@@ -546,8 +560,23 @@ export async function usage(root) {
 
 // ======================= MAIS =======================
 export function more(root) {
-  const items = [['agenda', 'Agenda', 'calendar', 'Reuniões marcadas'], ['automacao', 'Automação', 'bolt', 'Rotina, agentes, fila, pausa'], ['exclusao', 'Lista de exclusão', 'shield', 'Saúde e concorrentes da Arco'], ['configuracoes', 'Configurações', 'gear', 'Google, envio, agenda, limites'], ['uso', 'Uso e limites', 'gauge', 'Consumo do plano gratuito']];
+  const items = [['pipeline', 'Pipeline', 'pipeline', 'Cada empresa em uma etapa'], ['agenda', 'Agenda', 'calendar', 'Reuniões marcadas'], ['automacao', 'Automação', 'bolt', 'Rotina, agentes, fila, pausa'], ['exclusao', 'Lista de exclusão', 'shield', 'Saúde e concorrentes da Arco'], ['configuracoes', 'Configurações', 'gear', 'Google, envio, agenda, limites'], ['uso', 'Uso e limites', 'gauge', 'Consumo do plano gratuito']];
   mount(root, html`${head('Mais', '')}<div class="list">${items.map(([k, l, ic, desc]) => html`<a class="item" href="#/${k}">${icon(ic)}<div class="grow"><div class="title">${l}</div><div class="meta">${desc}</div></div>${icon('chev', 'chev')}</a>`)}</div>`);
 }
 
 export { esc, EXCL };
+
+function channelsBox(ch) {
+  if (!ch) return '';
+  const items = [];
+  if (ch.whatsapp) items.push(html`<a class="btn soft" href="${ch.whatsapp.link}" target="_blank" rel="noopener noreferrer">${icon('whatsapp')}${ch.whatsapp.display}</a>`);
+  if (ch.instagram) items.push(html`<a class="btn soft" href="${ch.instagram.link}" target="_blank" rel="noopener noreferrer">${icon('instagram')}@${ch.instagram.handle}</a>`);
+  if (ch.phone) items.push(html`<a class="btn soft" href="${ch.phone.link}">${icon('phone')}${ch.phone.display}</a>`);
+  return html`<div class="card flat tight stack-s">
+    <h3>Canais para contato manual</h3>
+    ${items.length ? html`<div class="chan-list">${items}</div>` : html`<p class="small muted">Sem WhatsApp, Instagram ou telefone publicados.</p>`}
+    ${ch.audit_url ? html`<div class="row wrap gap-top-s"><a class="btn small ghost" href="${ch.audit_url}" target="_blank" rel="noopener noreferrer">${icon('globe')}Ver análise pública</a>
+      <button class="btn small ghost" data-act="copyaudit" data-url="${ch.audit_url}">${icon('copy')}Copiar link</button>
+      <span class="xs faint">${ch.audit_views ? `aberta ${ch.audit_views}× · última ${fmtRel(ch.audit_last_viewed_at)}` : 'ainda não aberta'}</span></div>` : ''}
+  </div>`;
+}

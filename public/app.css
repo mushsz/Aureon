@@ -290,3 +290,24 @@ a.banner .chev { width: 18px; height: 18px; align-self: center; }
 .list > a.item { color: inherit; }
 .list > a.item > svg:first-child { width: 22px; height: 22px; color: var(--muted); flex: none; }
 .switch > span { font-weight: 600; font-size: 14px; }
+
+/* ---------- tela Hoje ---------- */
+.task { display: grid; gap: 10px; transition: opacity .2s, transform .2s; }
+.task.leaving { opacity: 0; transform: translateX(24px); }
+.task.touched { border-color: var(--accent); }
+.task .msg { min-height: 0; font-size: 15px; background: var(--surface-2); }
+.task .msg.script { font-size: 14px; }
+.ch-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
+.ch-row:empty { display: none; }
+.btn.ch { min-height: 48px; flex-direction: column; gap: 3px; font-size: 13px; padding: 8px; }
+.btn.ch svg { width: 20px; height: 20px; }
+.task-foot { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 4px; border-top: 1px solid var(--line); }
+.task-foot .btn { min-height: 38px; }
+.quote { margin: 0; padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--surface-2); border-radius: 0 10px 10px 0; font-size: 14px; white-space: pre-wrap; }
+.linklike { appearance: none; border: 0; background: none; padding: 0; text-align: left; color: inherit; font: inherit; cursor: pointer; }
+.ch-hint { margin-top: -4px; }
+.chan-list { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+@media (prefers-reduced-motion: reduce) { .task { transition: none; } }
+/* itens de grade não podem crescer além da coluna por causa de texto sem quebra */
+.task, .stack, .stack-s { grid-template-columns: minmax(0, 1fr); }
+.task > *, .stack > *, .stack-s > * { min-width: 0; }

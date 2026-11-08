@@ -9,7 +9,7 @@ Plataforma de prospecção comercial que roda sozinha na Cloudflare (plano gratu
 | Item | Situação |
 |---|---|
 | Código (backend, agentes, painel PWA) | Pronto, rodando localmente |
-| Testes automatizados | 54 testes passando no runtime real dos Workers (`npm test`), também no GitHub Actions |
+| Testes automatizados | 68 testes passando no runtime real dos Workers (`npm test`), também no GitHub Actions |
 | Teste ponta a ponta com dados reais | Feito localmente: OpenStreetMap real, sites reais, envio em simulação |
 | Publicação na Cloudflare | Automática pelo GitHub Actions assim que você cadastrar o token da Cloudflare no repositório ([docs/AUTONOMIA.md](docs/AUTONOMIA.md)) |
 | Gmail e Google Agenda | **Não conectados** — precisam das suas credenciais ([docs/CONFIGURACAO-GOOGLE.md](docs/CONFIGURACAO-GOOGLE.md)). O fluxo foi testado com respostas simuladas da API do Google, não com a sua conta |
@@ -28,8 +28,9 @@ Cron (1 gatilho, a cada minuto) ──► agendador central (src/engine.js)
         └──────────── lista de exclusão aplicada na descoberta, depois da análise e antes de cada envio ────────────┘
 ```
 
+- **Tela Hoje** (primeira aba no celular): a rotina de ~10 minutos com respostas, empresas quentes (abriram a sua análise), toques por WhatsApp/Instagram/ligação com texto pronto, reuniões e decisões rápidas. O e-mail é automático; WhatsApp e Instagram você envia com um toque.
 - **Um único Worker** serve a API, as páginas públicas (agendamento e descadastro), o painel (Static Assets) e o Cron.
-- **D1** guarda tudo: as 19 tabelas pedidas mais sessões, limites de tentativa, estados OAuth, histórico de etapas e auditoria (24 no total).
+- **D1** guarda tudo: as 19 tabelas pedidas mais sessões, limites de tentativa, estados OAuth, histórico de etapas, auditoria e tarefas da tela Hoje (25 no total).
 - **Execução em pequenos lotes**: cada ciclo faz pouco, grava o progresso e sai. Nada depende do seu computador.
 - **Sem IA paga**: classificação, pontuação e textos são regras e modelos próprios, determinísticos e testados.
 

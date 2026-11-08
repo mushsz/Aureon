@@ -1,10 +1,11 @@
 // INBOX — lê o Gmail, guarda só respostas a conversas iniciadas pelo sistema e classifica cada uma
 // por regras determinísticas. Ambíguo → REVISÃO NECESSÁRIA, nunca resposta automática.
 
-import { normalize, nowIso, truncate } from '../util.js';
+import { normalize, nowIso, truncate, localDate } from '../util.js';
 import { getSettings, stageStmts } from '../db.js';
 import { gmailList, gmailGet, parseGmailMessage } from '../google.js';
 import { runCloser } from './closer.js';
+import { replyTaskStmt } from './planner.js';
 
 export const CLASSES = {
   positive: 'Resposta positiva',
@@ -148,6 +149,19 @@ export async function ingestInbound(ctx, msg, conv) {
     stmts.push(...stageStmts(ctx, lead, keepStage ? lead.stage : (to || lead.stage), `Resposta: ${CLASSES[cls.classification]} (${cls.reason})`, 'inbox', extra));
     stmts.push(ctx.stmt('UPDATE conversations SET status = ?, last_message_at = ?, updated_at = ? WHERE id = ?', cls.needs_review ? 'needs_review' : 'open', msg.internalDate, ts, conv.id));
   }
+  const stopAll = ['unsubscribe', 'refusal', 'bounce'].includes(cls.classification) && !(cls.classification === 'refusal' && cls.needs_review);
+  if (stopAll) {
+    // quem pede para sair em um canal sai de todos: WhatsApp e Instagram da empresa também
+    const co = await ctx.first('SELECT whatsapp, instagram FROM companies WHERE id = ?', lead.company_id);
+    if (co?.whatsapp) stmts.push(ctx.stmt("INSERT OR IGNORE INTO suppression_list (type, value, reason, source, created_at) VALUES ('phone', ?, ?, ?, ?)", co.whatsapp, cls.classification, `gmail:${msg.id}`, ts));
+    if (co?.instagram) stmts.push(ctx.stmt("INSERT OR IGNORE INTO suppression_list (type, value, reason, source, created_at) VALUES ('instagram', ?, ?, ?, ?)", co.instagram, cls.classification, `gmail:${msg.id}`, ts));
+    stmts.push(ctx.stmt("UPDATE tasks SET status = 'skipped', updated_at = ? WHERE lead_id = ? AND status = 'open'", ts, lead.id));
+  } else if (cls.classification !== 'auto') {
+    const settings = await getSettings(ctx);
+    stmts.push(replyTaskStmt(ctx, { conv, lead: { id: lead.id, company_id: lead.company_id }, inboundId: msg.id, cls,
+      companyName: (await ctx.first('SELECT name FROM companies WHERE id = ?', lead.company_id))?.name || '', today: localDate(ctx.now, settings.timezone) }));
+    stmts.push(ctx.stmt("UPDATE tasks SET status = 'done', done_at = ?, updated_at = ? WHERE lead_id = ? AND status = 'open' AND kind IN ('touch','hot')", ts, ts, lead.id));
+  }
   const res = await ctx.batch(stmts);
   const inserted = res[0]?.meta?.changes > 0;
   if (inserted) {
@@ -195,7 +209,10 @@ export async function runInbox(ctx, batch = 10) {
   for (const item of toClose) {
     if (ctx.budgetLeft() < 8) break;
     const r = await runCloser(ctx, settings, item.conv, item.m, item.cls);
-    if (r.replied) replied++;
+    if (r.replied) {
+      replied++;
+      await ctx.run("UPDATE tasks SET status = 'done', done_at = ?, updated_at = ? WHERE dedupe_key = ? AND status = 'open'", nowIso(), nowIso(), `reply:${item.m.id}`);
+    }
   }
   return { checked: ids.length, ingested, ignored, auto_replied: replied };
 }
